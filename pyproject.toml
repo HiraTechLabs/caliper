@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "caliper"
+version = "0.1.0"
+description = "Caliper - a private software factory: request -> plan -> execute -> review -> human approval -> merge -> Prod"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "jinja2",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx",
+]
+
+[project.scripts]
+caliper = "caliper.main:run"
+
+[tool.setuptools.packages.find]
+include = ["caliper*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
