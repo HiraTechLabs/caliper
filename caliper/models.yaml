@@ -1,0 +1,19 @@
+# caliper/models.yaml — role -> model mapping (source of truth for adapters)
+# Rule: the three roles MUST resolve to three different models, ideally
+# different vendors/families. Startup validation fails otherwise.
+# adapter: mock | http (http = OpenAI-compatible /chat/completions endpoint)
+
+planning:
+  model: qwen3-coder-planner
+  adapter: mock
+  # base_url: http://127.0.0.1:8000/v1   (used by adapter: http)
+
+execution:
+  model: deepseek-v4-coder
+  adapter: mock
+  # base_url: http://127.0.0.1:8001/v1
+
+review:
+  model: glm-5-coder-reviewer
+  adapter: mock
+  # base_url: http://127.0.0.1:8002/v1
