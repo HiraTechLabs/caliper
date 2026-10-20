@@ -144,6 +144,23 @@ textarea {
 }
 .attach summary { cursor: pointer; color: var(--text-muted); }
 
+.stepper { list-style: none; display: flex; gap: 4px; padding: 0; margin: 16px 0; flex-wrap: wrap; }
+.step { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-muted); font-size: 12px; }
+.step .step-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--border); }
+.step.active { border-color: var(--accent); color: var(--text); }
+.step.active .step-dot { background: var(--accent); }
+.step.failed { border-color: var(--danger); color: var(--danger); }
+.step.failed .step-dot { background: var(--danger); }
+
+.rule-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.rule-row { display: flex; gap: 12px; align-items: baseline; padding: 10px 14px; }
+.rule-row.fail { border-color: var(--danger); }
+.rule-row.pass .rule-id { color: var(--text-muted); }
+.rule-id { font-size: 12px; }
+.rule-row.fail .rule-id { color: var(--danger); }
+
+.diff { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.5; }
+
 .detail-section { margin-top: 32px; }
 .env-grid, .principles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
 .principle-card summary { cursor: pointer; font-weight: 500; }

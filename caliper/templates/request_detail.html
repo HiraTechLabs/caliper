@@ -1,8 +1,17 @@
 {% extends "base.html" %}
+{% from "_components.html" import status_pill, stepper %}
 {% block title %}{{ req.project_id }}: {{ req.id }} - Caliper{% endblock %}
 {% block content %}
-<h1 class="page-title">{{ req.id }} · {{ req.kind }}</h1>
-<p class="muted">{{ req.project_id }} · submitted {{ req.created_at }}</p>
+<div class="page-head">
+  <h1 class="page-title">{{ req.project_id }} · {{ req.id }}</h1>
+  {{ status_pill(req.status) }}
+</div>
+{{ stepper(req.status) }}
+
+{% if req.status == 'failed' %}
+<div class="alert danger">Review failed 3 times. The workflow stopped and needs your call: edit the plan by hand or reject the request.</div>
+{% endif %}
+
 <div class="card request-body">
   <p>{{ req.text }}</p>
   {% if req.extra %}
@@ -12,5 +21,49 @@
   </details>
   {% endif %}
 </div>
-<p class="muted placeholder-note">Pipeline is not wired yet. Next step requires planning, execution and review models.</p>
+
+{% if artifacts %}
+<section class="detail-section">
+  <h2>Review</h2>
+  {% if failed %}
+  <p class="muted">{{ failed|length }} failed · {{ verdicts|length - failed|length }} passed</p>
+  {% else %}
+  <p class="muted">All {{ verdicts|length }} rules passed</p>
+  {% endif %}
+  <ul class="rule-list">
+    {% for rid in failed %}
+    <li class="card rule-row fail"><span class="mono rule-id">FAIL {{ rid }}</span><span>{{ verdicts[rid].reason }}</span></li>
+    {% endfor %}
+    {% if passed %}
+    <li><details><summary class="muted">{{ passed|length }} passed - show</summary>
+      <ul class="rule-list">
+        {% for rid in passed %}
+        <li class="card rule-row pass"><span class="mono rule-id">PASS {{ rid }}</span><span>{{ verdicts[rid].reason }}</span></li>
+        {% endfor %}
+      </ul>
+    </details></li>
+    {% endif %}
+  </ul>
+</section>
+
+<section class="detail-section">
+  <h2>Plan</h2>
+  <details><summary class="muted">Show plan</summary><pre class="principle-content">{{ artifacts.plan }}</pre></details>
+</section>
+
+<section class="detail-section">
+  <h2>Changes</h2>
+  <pre class="diff"><code>{{ artifacts.diff }}</code></pre>
+</section>
+{% endif %}
+
+<div class="form-actions">
+  {% if req.status == 'submitted' %}
+  <form method="post" action="/requests/{{ req.id }}/run">
+    <button class="btn primary" type="submit">Run workflow</button>
+  </form>
+  {% elif req.status == 'failed' %}
+  <span class="muted">Re-running requires dropping state (not yet supported).</span>
+  {% endif %}
+</div>
 {% endblock %}

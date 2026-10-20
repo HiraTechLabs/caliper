@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% from "_components.html" import status_pill %}
+{% block title %}Error - Caliper{% endblock %}
+{% block content %}
+<div class="empty-state card">
+  <div class="empty-icon">&#9888;</div>
+  <p>The workflow could not run: {{ reason }}</p>
+  <p class="muted">The request stays in its current state. Nothing was lost.</p>
+  <a class="btn primary" href="/requests/{{ req_id }}">Back to request</a>
+</div>
+{% endblock %}

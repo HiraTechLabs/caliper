@@ -1,0 +1,52 @@
+import json
+import re
+from pathlib import Path
+
+MAX_LOOPS = 3
+
+PIPELINE_STATUSES = ("submitted", "planning", "executing", "reviewing", "awaiting_approval", "merged", "deployed_dev", "live")
+
+
+class WorkflowError(Exception):
+    pass
+
+
+def all_rule_ids() -> list[str]:
+    from caliper.principles import PRINCIPLES
+    return [rid for rules in PRINCIPLES.values() for _, rid, _ in rules]
+
+
+class MockPlanningModel:
+    def plan(self, req: dict, project: dict, rule_ids: list[str]) -> str:
+        cited = ", ".join(rule_ids)
+        return (
+            f"# Plan for {req['id']}\n\n"
+            f"Request: {req['text']}\n\n"
+            f"## Steps\n1. Locate the affected module ({project['id']}).\n"
+            f"2. Implement the change described above.\n"
+            f"3. Add tests covering the new behavior.\n4. Update decisions and graph.\n\n"
+            f"## Rules relied on\n{cited}\n"
+        )
+
+
+class MockExecutionModel:
+    def execute(self, req: dict, project: dict, plan: str) -> str:
+        file_name = "feature_refund.md" if req["kind"] == "feature" else "fix_rounding.md"
+        return (
+            f"--- a/{file_name}\n+++ b/{file_name}\n@@ -0,0 +1,3 @@\n"
+            f"+[mock change for {req['id']}]\n"
+            f"+Implements: {req['text']}\n"
+            f"+Git source of truth: projects/{project['id']}\n"
+        )
+
+
+class MockReviewModel:
+    def review(self, req: dict, project: dict, plan: str, diff: str, rule_ids: list[str]) -> dict:
+        fail = bool(getattr(self, "force_fail", False))
+        verdicts = {}
+        for rid in rule_ids:
+            if fail and rid.endswith("-001"):
+                verdicts[rid] = {"status": "fail", "reason": f"[mock] {rid} violated by {req['id']}"}
+            else:
+                verdicts[rid] = {"status": "pass", "reason": "[mock] satisfied"}
+        return {"verdicts": verdicts}

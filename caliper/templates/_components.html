@@ -42,3 +42,20 @@
   {% set pill = labels.get(status, [status, 'pill status-neutral']) %}
   <span class="{{ pill[1] }}"><span class="dot"></span>{{ pill[0] }}</span>
 {% endmacro %}
+
+{% macro stepper(status) %}
+  {% set steps = ['plan', 'execute', 'review', 'approve', 'dev', 'prod'] %}
+  {% set active_map = {
+    'submitted': -1, 'planning': 0, 'executing': 1, 'reviewing': 2,
+    'awaiting_approval': 3, 'merged': 4, 'deployed_dev': 4, 'live': 5,
+    'failed': 2
+  } %}
+  {% set active = active_map.get(status, -1) %}
+  <ol class="stepper">
+    {% for step in steps %}
+    <li class="step {{ 'active' if loop.index0 == active }} {{ 'failed' if status == 'failed' and step == 'review' }}">
+      <span class="step-dot"></span>{{ step|capitalize() }}
+    </li>
+    {% endfor %}
+  </ol>
+{% endmacro %}

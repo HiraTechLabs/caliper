@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -7,20 +8,24 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from caliper.principles import PRINCIPLES
 from caliper.registry import STACK_PRESETS, ProjectError, ProjectRegistry
 from caliper.state import VALID_KINDS, RequestStore
+
 
 BASE_DIR = Path(__file__).resolve().parent
 
 
-def create_app(registry: ProjectRegistry | None = None, requests: RequestStore | None = None) -> FastAPI:
+def create_app(registry: ProjectRegistry | None = None, requests: RequestStore | None = None, workflow=None) -> FastAPI:
     if registry is None:
         projects_root = os.environ.get("CALIPER_PROJECTS_ROOT", str(BASE_DIR.parent / "projects"))
         registry = ProjectRegistry(Path(projects_root))
     if requests is None:
         db_path = os.environ.get("CALIPER_DB_PATH", str(BASE_DIR.parent / ".caliper-state" / "state.sqlite3"))
         requests = RequestStore(db_path)
+    from caliper.workflow import Workflow
+    artifacts_root = Path(os.environ.get("CALIPER_PROJECTS_ROOT", str(BASE_DIR.parent / "projects")))
+    if workflow is None:
+        workflow = Workflow(requests, registry, artifacts_root)
     app = FastAPI(title="Caliper", version="0.1.0")
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=BASE_DIR / "templates")
@@ -92,7 +97,37 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
         req = requests.get(req_id)
         if req is None:
             return templates.TemplateResponse(request, "request_missing.html", {"req_id": req_id}, status_code=404)
-        return templates.TemplateResponse(request, "request_detail.html", {"req": req})
+        artifacts = {}
+        artifacts_dir = workflow.artifact_dir(req_id)
+        for name, key in (("plan.md", "plan"), ("diff.patch", "diff"), ("review.json", "review")):
+            path = artifacts_dir / name
+            if path.is_file():
+                artifacts[key] = path.read_text(encoding="utf-8")
+        failed, passed, verdicts = [], [], {}
+        if "review" in artifacts:
+            parsed = json.loads(artifacts["review"])
+            verdicts = parsed["verdicts"]
+            failed = [rid for rid, v in verdicts.items() if v["status"] == "fail"]
+            passed = [rid for rid, v in verdicts.items() if v["status"] == "pass"]
+            artifacts.pop("review")
+        return templates.TemplateResponse(request, "request_detail.html", {
+            "req": req,
+            "artifacts": artifacts,
+            "failed": failed,
+            "passed": passed,
+            "verdicts": verdicts,
+        })
+
+    @app.post("/requests/{req_id}/run")
+    async def request_run(request: Request, req_id: str):
+        if requests.get(req_id) is None:
+            return templates.TemplateResponse(request, "request_missing.html", {"req_id": req_id}, status_code=404)
+        try:
+            updated = workflow.run(req_id)
+        except Exception as exc:  #WFError only
+            req = requests.get(req_id)
+            return templates.TemplateResponse(request, "request_run_error.html", {"req_id": req_id, "reason": str(exc), "req": req}, status_code=500)
+        return RedirectResponse(f"/requests/{req_id}", status_code=303)
 
     return app
 
