@@ -1,7 +1,7 @@
 import json
 import pytest
 
-from caliper.mock_models import MockReviewModel
+from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel
 from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
 from caliper.workflow import MAX_LOOPS, Workflow, WorkflowError, validate_review
@@ -15,10 +15,13 @@ class FailingReview(MockReviewModel):
 @pytest.fixture()
 def env(tmp_path):
     registry = ProjectRegistry(tmp_path / "projects")
-    registry.create_project(name="Shop API", repo_mode="create_new")
+    registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
     approve_principles(registry, "shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
-    workflow = Workflow(requests, registry, tmp_path / "projects")
+    workflow = Workflow(
+        requests, registry, tmp_path / "projects",
+        planning=MockPlanningModel(), execution=MockExecutionModel(), review=MockReviewModel(),
+    )
     return registry, requests, workflow
 
 
@@ -50,7 +53,10 @@ def test_failed_review_loops_then_stops_for_human(env):
     _, requests, workflow = env
     requests_list = requests
     req = requests_list.create("shop-api", "bugfix", "Fix rounding", extra="ValueError: precision")
-    failing = Workflow(requests, env[0], env[2].artifacts_root, review=FailingReview())
+    failing = Workflow(
+        requests, env[0], env[2].artifacts_root,
+        planning=workflow.planning, execution=workflow.execution, review=FailingReview(),
+    )
 
     result = failing.run(req["id"])
 
@@ -74,9 +80,12 @@ def test_unknown_request_raises(env):
 
 def test_run_refuses_a_project_without_approved_principles(tmp_path):
     registry = ProjectRegistry(tmp_path / "projects")
-    registry.create_project(name="Shop API", repo_mode="create_new")
+    registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
-    workflow = Workflow(requests, registry, tmp_path / "projects")
+    workflow = Workflow(
+        requests, registry, tmp_path / "projects",
+        planning=MockPlanningModel(), execution=MockExecutionModel(), review=MockReviewModel(),
+    )
     req = requests.create("shop-api", "feature", "Add refund endpoint")
 
     with pytest.raises(WorkflowError, match="approved principle rules"):

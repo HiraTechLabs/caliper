@@ -1,67 +1,79 @@
 {% extends "base.html" %}
-{% from "_components.html" import status_pill %}
+{% from "_components.html" import status_pill, factory_floor %}
 {% block title %}Caliper{% endblock %}
+{% block page_id %}dashboard{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">Dashboard</h1>
   <a class="btn primary head-action" href="/requests/new">+ New request</a>
 </div>
 
-<section class="detail-section">
-  <h2>NEEDS YOU{% if counters %} ({{ needs|length }}){% endif %}</h2>
-  {% if needs %}
-  <ul class="request-list">
+<section class="detail-section" data-section="needs">
+  <h2>NEEDS YOU</h2>
+  <ul class="request-list" data-request-list="needs" {% if not needs %}hidden{% endif %}>
     {% for req in needs %}
-    <li class="card request-card" data-req-badge="pill" data-req-id="{{ req.id }}">
-      <a class="request-link" href="/requests/{{ req.id }}">
-        {{ status_pill(req.status) }}
-        <span class="request-text">{{ req.text[:90] }}</span>
-        <span class="mono muted">{{ req.project_id }} · {{ req.id }}</span>
-      </a>
+    <li class="card request-card request-row" data-req-id="{{ req.id }}" data-req-text="{{ req.text }}" data-project-id="{{ req.project_id }}" data-created-at="{{ req.created_at }}">
+      <div class="request-row-main">
+        <a class="request-link" href="/requests/{{ req.id }}">
+          {{ status_pill(req.status, req.id) }}
+          <span class="request-text" data-row-text>{{ req.text[:90] }}</span>
+          <span class="mono muted" data-row-meta>{{ req.project_id }} &middot; {{ req.id }}</span>
+        </a>
+        <button class="btn ghost floor-toggle" type="button" data-floor-toggle aria-expanded="false">View floor</button>
+      </div>
+      <div class="factory-slot" data-factory-slot hidden>
+        {{ factory_floor(req.status, compact=True) }}
+      </div>
     </li>
     {% endfor %}
   </ul>
-  {% else %}
-  <p class="muted">All clear. Nothing is waiting for your approval.</p>
-  {% endif %}
+  <p class="muted" data-section-empty="needs" {% if needs %}hidden{% endif %}>All clear. Nothing is waiting for your approval.</p>
 </section>
 
-<section class="detail-section">
-  <h2>IN PROGRESS{% if counters %} ({{ running|length }}){% endif %}</h2>
-  {% if running %}
-  <ul class="request-list">
+<section class="detail-section" data-section="running">
+  <h2>IN PROGRESS</h2>
+  <ul class="request-list" data-request-list="running" {% if not running %}hidden{% endif %}>
     {% for req in running %}
-    <li class="card request-card">
-      <a class="request-link" href="/requests/{{ req.id }}" data-poll>
-        {{ status_pill(req.status) }}
-        <span class="request-text">{{ req.text[:90] }}</span>
-        <span class="mono muted">{{ req.project_id }} · {{ req.id }}</span>
-      </a>
+    <li class="card request-card request-row" data-req-id="{{ req.id }}" data-req-text="{{ req.text }}" data-project-id="{{ req.project_id }}" data-created-at="{{ req.created_at }}">
+      <div class="request-row-main">
+        <a class="request-link" href="/requests/{{ req.id }}">
+          {{ status_pill(req.status, req.id) }}
+          <span class="request-text" data-row-text>{{ req.text[:90] }}</span>
+          <span class="mono muted" data-row-meta>{{ req.project_id }} &middot; {{ req.id }}</span>
+        </a>
+        <button class="btn ghost floor-toggle" type="button" data-floor-toggle aria-expanded="false">View floor</button>
+      </div>
+      <div class="factory-slot" data-factory-slot hidden>
+        {{ factory_floor(req.status, compact=True) }}
+      </div>
     </li>
     {% endfor %}
   </ul>
-  {% else %}
-  <p class="muted">No request is being processed right now.</p>
-  {% endif %}
+  <p class="muted" data-section-empty="running" {% if running %}hidden{% endif %}>No request is being processed right now.</p>
 </section>
 
-<section class="detail-section">
+<section class="detail-section" data-section="recent">
   <h2>RECENT</h2>
-  {% if recent %}
-  <ul class="request-list">
+  <ul class="request-list" data-request-list="recent" {% if not recent %}hidden{% endif %}>
     {% for req in recent %}
-    <li class="card request-card">
-      <a class="request-link" href="/requests/{{ req.id }}">
-        {{ status_pill(req.status) }}
-        <span class="request-text">{{ req.text[:90] }}</span>
-        <span class="mono muted">{{ req.created_at }}</span>
-      </a>
+    <li class="card request-card request-row" data-req-id="{{ req.id }}" data-req-text="{{ req.text }}" data-project-id="{{ req.project_id }}" data-created-at="{{ req.created_at }}">
+      <div class="request-row-main">
+        <a class="request-link" href="/requests/{{ req.id }}">
+          {{ status_pill(req.status, req.id) }}
+          <span class="request-text" data-row-text>{{ req.text[:90] }}</span>
+          <span class="mono muted" data-row-meta>{{ req.created_at }}</span>
+        </a>
+        <button class="btn ghost floor-toggle" type="button" data-floor-toggle aria-expanded="false">View floor</button>
+      </div>
+      <div class="factory-slot" data-factory-slot hidden>
+        {{ factory_floor(req.status, compact=True) }}
+      </div>
     </li>
     {% endfor %}
   </ul>
-  {% else %}
-  <p class="muted">No requests yet. Create a project and tell Caliper what you want.</p>
-  <a class="btn primary" href="/projects/new">New project</a>
-  {% endif %}
+  <div data-section-empty="recent" {% if recent %}hidden{% endif %}>
+    <p class="muted">No requests yet. Create a project and tell Caliper what you want.</p>
+    <a class="btn primary" href="/projects/new">New project</a>
+  </div>
 </section>
 {% endblock %}

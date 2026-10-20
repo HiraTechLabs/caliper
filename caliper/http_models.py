@@ -9,23 +9,27 @@ class ChatClient:
     `transport` is injectable for tests; real transport is httpx.
     """
 
-    def __init__(self, model: str, base_url: str, transport=None):
+    def __init__(self, model: str, base_url: str, api_key: str | None = None, timeout: float = 600, transport=None):
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self.api_key = (api_key or "").strip()
+        self.timeout = timeout
         self._transport = transport
 
     def post(self, content: str) -> str:
         if self._transport is not None:
             return self._transport(self, content)
         import httpx
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         response = httpx.post(
             f"{self.base_url}/chat/completions",
+            headers=headers,
             json={
                 "model": self.model,
                 "messages": [{"role": "user", "content": content}],
                 "temperature": 0.2,
             },
-            timeout=600,
+            timeout=self.timeout,
         )
         response.raise_for_status()
         payload = response.json()
@@ -63,7 +67,7 @@ class HTTPPlanningModel:
     def plan(self, req: dict, project: dict, rule_ids: list[str]) -> str:
         prompt = (
             "You are the Planning Model of a private software factory.\n"
-            f"Project: {project['id']} (stack preset: {project['stack_preset']})\n"
+            f"Project: {project['id']}\n"
             f"Request type: {req['kind']}\nRequest text: {req['text']}\n"
             + (f"Error/log attached:\n{req['extra']}\n" if req.get("extra") else "")
             + "Write a short, concrete implementation plan in markdown.\n"

@@ -7,10 +7,11 @@ nodes:
     path: caliper/main.py
     kind: application
     description: >
-      FastAPI HTTP surface and composition root: dashboard, project list/create/detail,
-      request composer, request page (plan/diff/review/actions), /status polling JSON,
-      /health, the run() entrypoint (bind 127.0.0.1:8080 by default) and the JSON API
-      under /api for repository access, principles and environments.
+      FastAPI HTTP surface and composition root: dashboard, project list/create/detail
+      with setup checklist, request composer, request page (plan/diff/review/actions),
+      /health, the run() entrypoint (bind 127.0.0.1:8080 by default), the JSON API under
+      /api for repository access, principles, environments and project deletion, and
+      GET /api/events (Server-Sent Events).
   - id: workflow-engine
     path: caliper/workflow.py
     kind: domain
@@ -20,12 +21,6 @@ nodes:
       approve&merge -> deploy_dev -> approve_prod -> live. Owns artifact paths,
       review validation (per-rule verdicts mandatory) and takes the rule IDs of
       the project from its APPROVED principles.
-  - id: model-adapters
-    path: caliper/mock_models.py
-    kind: domain
-    description: >
-      Mock role models (planning/execution/review) used by default: deterministic
-      outputs citing rule IDs; deterministic optional failure for loop testing.
   - id: http-model-adapters
     path: caliper/http_models.py
     kind: domain
@@ -37,9 +32,9 @@ nodes:
     path: caliper/models_config.py
     kind: domain
     description: >
-      Loads/validates models.yaml (three roles, adapter mock|http, base_url when
-      http) and enforces three DISTINCT model ids at startup; factory builds
-      role adapters (mock or http).
+      Loads/validates models.yaml (three roles, base_url + model, keys under
+      CALIPER_SECRETS_DIR) and enforces three DISTINCT model ids at startup.
+      Blank roles block workflow runs; the factory builds HTTP role adapters.
   - id: deploy-adapter
     path: caliper/workflow.py
     kind: domain
@@ -87,15 +82,32 @@ nodes:
     kind: data-store
     description: >
       SQLite run state (CALIPER_DB_PATH default .caliper-state/state.sqlite3):
-      request id/kind/text/extra/status/loop_count/review_note. Safely deletable.
+      request id/kind/text/extra/status/loop_count/review_note plus append-only
+      audit_events. Publishes committed changes to the event bus and supports
+      cancel/restore/delete-in-one-transaction. Safely deletable.
+  - id: event-bus
+    path: caliper/events.py
+    kind: infrastructure
+    description: >
+      In-process fan-out from request-store writes to per-browser SSE queues;
+      bounded queues drop stale tokens for slow clients.
+  - id: project-deletion
+    path: caliper/deletion.py
+    kind: domain
+    description: >
+      Safe remove-from-Caliper: cancel active requests, optional Dev/Prod stop
+      before any deletion, abort on failure, remove only resolved paths under
+      CALIPER_DATA_DIR/projects/<id> and CALIPER_SECRETS_DIR/projects/<id>, then
+      delete DB rows plus audit. Never touches the GitHub repository or .caliper/.
   - id: app-ui
     path: caliper/templates
     kind: presentation
     description: >
       Jinja2 server-rendered screens per draft UI_SYSTEM: dashboard
-      (needs-you/in-progress/recent), projects list, add form, project page,
-      request page (stepper, review rows failed-first, plan, diff, approve gates),
-      composer, empty/missing/error states. Vanilla-JS poller updates pills from /status.
+      (needs-you/in-progress/recent), projects list, add form, project page with
+      setup checklist/environments/delete dialog, request page (stepper, review rows
+      failed-first, plan, diff, approve gates), composer, empty/missing/error states.
+      Vanilla JS subscribes to SSE and updates request states without reload.
   - id: project-store
     path: projects/
     kind: data-store
@@ -108,13 +120,15 @@ nodes:
     path: tests/
     kind: test-suite
     description: >
-      pytest suite covering: scaffold smoke, registry, request state store, request
-      UI flows, workflow engine (success path, review loop exhaustion, validation),
-      workflow UI (run/approve gates), models.yaml validation, HTTP adapters with
-      fake transport, dashboard/global composer/status snapshot, repository access
-      (deploy key, read/write probe) and the principles/environments API (states,
-      approval rules, Git round trip against a local repository, SSH key and
-      ssh-copy-id command, host key pinning and a changed host key).
+      pytest suite (113 passing, 1 skipped on Windows) covering: scaffold smoke,
+      registry, request state store, request UI flows, workflow engine (success path,
+      review loop exhaustion, validation), workflow UI (run/approve gates),
+      models.yaml validation, HTTP adapters with fake transport, dashboard/global
+      composer/status snapshot, repository access (deploy key, read/write probe),
+      the principles/environments API (states, approval rules, Git round trip
+      against a local repository, SSH key and ssh-copy-id command, host key pinning
+      and a changed host key), safe project deletion and SSE. Mock role adapters
+      live only here.
 
 edges:
   - from: app-core
@@ -124,14 +138,8 @@ edges:
     to: principles
     relation: exposes-principles-and-environment-api
   - from: workflow-engine
-    to: model-adapters
-    relation: role-calls
-  - from: workflow-engine
     to: http-model-adapters
     relation: role-calls-when-configured
-  - from: models-config
-    to: model-adapters
-    relation: builds
   - from: models-config
     to: http-model-adapters
     relation: builds-when-configured
@@ -168,6 +176,21 @@ edges:
   - from: app-core
     to: models-config
     relation: loads-at-startup
+  - from: app-core
+    to: project-deletion
+    relation: deletes-through
+  - from: app-core
+    to: event-bus
+    relation: streams-sse-from
+  - from: request-store
+    to: event-bus
+    relation: publishes-changes-to
+  - from: project-deletion
+    to: request-store
+    relation: cancels-and-deletes-run-state-in
+  - from: project-deletion
+    to: remote-access
+    relation: optionally-stops-environments-through
   - from: tests
     to: app-core
     relation: tests
@@ -195,3 +218,9 @@ edges:
   - from: tests
     to: remote-access
     relation: tests-with-a-fake-ssh-runner
+  - from: tests
+    to: project-deletion
+    relation: tests-safe-deletion
+  - from: tests
+    to: event-bus
+    relation: tests-sse

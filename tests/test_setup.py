@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from caliper.main import create_app
@@ -35,7 +36,7 @@ def app(tmp_path, repo_tester=None, env_tester=None):
         env_tester=env_tester or default_env_tester,
     )
     registry.create_project(
-        name="Shop API", repo_mode="existing", repo_url="https://github.com/example/shop-api"
+        name="Shop API", repo_url="https://github.com/example/shop-api"
     )
     requests = RequestStore(tmp_path / "state.sqlite3")
     client = TestClient(create_app(registry=registry, requests=requests))
@@ -80,7 +81,7 @@ def test_a_failed_repository_test_is_reported_plainly(tmp_path):
         repo_tester=failing_repo_tester,
     )
     registry.create_project(
-        name="Shop API", repo_mode="existing", repo_url="https://github.com/example/shop-api"
+        name="Shop API", repo_url="https://github.com/example/shop-api"
     )
     client = TestClient(create_app(registry=registry, requests=RequestStore(tmp_path / "state.sqlite3")))
 
@@ -92,7 +93,11 @@ def test_a_failed_repository_test_is_reported_plainly(tmp_path):
 
 def test_a_project_without_a_repository_url_cannot_be_tested(tmp_path):
     registry = ProjectRegistry(tmp_path / "projects", secrets_dir=tmp_path / "secrets", key_generator=_key_generator)
-    registry.create_project(name="Shop API", repo_mode="create_new")
+    registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    path = registry.projects_root / "shop-api" / "manifest.yaml"
+    manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+    manifest["repo"]["url"] = ""
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
     client = TestClient(create_app(registry=registry, requests=RequestStore(tmp_path / "state.sqlite3")))
 
     response = client.post("/api/projects/shop-api/repository/test")

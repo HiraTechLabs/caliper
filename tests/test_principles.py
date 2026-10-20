@@ -47,7 +47,7 @@ def app(tmp_path, repo):
     registry = ProjectRegistry(
         tmp_path / "projects", secrets_dir=tmp_path / "secrets", key_generator=_key_generator
     )
-    registry.create_project(name="Shop API", repo_mode="existing", repo_url=url)
+    registry.create_project(name="Shop API", repo_url=url)
     registry.ensure_deploy_key("shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
     return TestClient(create_app(registry=registry, requests=requests)), registry, bare

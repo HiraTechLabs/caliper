@@ -1,0 +1,14 @@
+{
+  "name": "caliper-ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Caliper motion layer: bundled from caliper/static/js/app.js with motion.",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild caliper/static/js/app.js --bundle --minify --format=iife --target=es2020 --outfile=caliper/static/app.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "motion": "^14.4.0"
+  }
+}

@@ -2,16 +2,23 @@ import pytest
 from fastapi.testclient import TestClient
 
 from caliper.main import create_app
+from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel
 from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
-from tests.support import approve_principles
+from caliper.workflow import Workflow
+from tests.support import complete_setup
 
 
 @pytest.fixture()
 def bare(tmp_path):
     registry = ProjectRegistry(tmp_path / "projects")
     requests = RequestStore(tmp_path / "state.sqlite3")
-    return TestClient(create_app(registry=registry, requests=requests)), registry, tmp_path
+    workflow = Workflow(
+        requests, registry, tmp_path / "projects",
+        planning=MockPlanningModel(), execution=MockExecutionModel(), review=MockReviewModel(),
+    )
+    client = TestClient(create_app(registry=registry, requests=requests, workflow=workflow))
+    return client, registry, tmp_path
 
 
 def test_empty_dashboard_shows_guidance_per_section(bare):
@@ -31,7 +38,7 @@ def test_global_composer_requires_project_first(bare):
 
 def test_global_composer_with_project_shows_selector(bare):
     client, registry, _ = bare
-    registry.create_project(name="Shop API", repo_mode="create_new")
+    registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
     response = client.get("/requests/new")
     assert 'name="project_id"' in response.text
     assert "Shop API" in response.text
@@ -39,8 +46,8 @@ def test_global_composer_with_project_shows_selector(bare):
 
 def test_global_composer_submit_creates_and_redirects(bare):
     client, registry, _ = bare
-    registry.create_project(name="Shop API", repo_mode="create_new")
-    approve_principles(registry, "shop-api")
+    registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    complete_setup(registry, "shop-api")
     response = client.post(
         "/requests/new",
         data={"project_id": "shop-api", "kind": "bugfix", "text": "Login redirect broken", "extra": ""},
@@ -52,9 +59,14 @@ def test_global_composer_submit_creates_and_redirects(bare):
 
 def test_status_snapshot_reports_pipeline_state(bare):
     client, registry, tmp_path = bare
-    registry.create_project(name="Shop API", repo_mode="create_new")
-    approve_principles(registry, "shop-api")
-    requests = client  # unused marker for clarity
+    registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    complete_setup(registry, "shop-api")
+    requests = RequestStore(tmp_path / "state.sqlite3")
+    workflow = Workflow(
+        requests, registry, tmp_path / "projects",
+        planning=MockPlanningModel(), execution=MockExecutionModel(), review=MockReviewModel(),
+    )
+    client = TestClient(create_app(registry=registry, requests=requests, workflow=workflow))
     client.post("/requests/new", data={"project_id": "shop-api", "kind": "feature", "text": "x", "extra": ""})
     snapshot = client.get("/status").json()
     assert snapshot["requests"][0]["status"] == "submitted"

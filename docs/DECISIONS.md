@@ -27,6 +27,10 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-018 | 2026-10-20 | Dashboard home + live polling via tiny JS on `/status`, no HTMX yet | (this) |
 | D-019 | 2026-10-20 | Principles live in the project repository; no generated rules | (this) |
 | D-020 | 2026-10-20 | One SSH key per environment, host key pinned, plain-language failures | (this) |
+| D-021 | 2026-10-20 | Project creation asks only name + repo URL; requests gated by a visible setup checklist | (this) |
+| D-022 | 2026-10-20 | Model roles are blank by default; mock adapters live only under `tests/` | (this) |
+| D-023 | 2026-10-20 | Safe project deletion + SSE request updates replace `/status` polling | (this) |
+| D-024 | 2026-10-20 | Static asset URLs carry a version query; project settings/delete are a visible tab | (this) |
 
 ## Entries
 
@@ -246,3 +250,54 @@ Format: id, date, decision, reason, alternatives rejected.
   `accept-new` host keys (a changed host key must fail loudly); one key for both environments
   (a key per environment keeps the blast radius small and lets one environment be revoked
   alone); raw command output as the error (the human needs the reason and the fix).
+
+### D-021 - Project creation asks only name + repo URL; requests are gated by setup
+- **Decision:** Creating a project takes two fields only: name and an existing GitHub repository
+  URL. The project page shows four setup items: Repository access, Principles (6), Dev
+  environment, Prod environment. Request pages and submission stay blocked with HTTP 409 and
+  a one-line reason until all four are complete. No stack preset is stored; TechStack is one of
+  the six principles files.
+- **Reason:** AGENTS.md 7 and 12.2. Asking for a preset duplicated the TechStack principles and
+  let the UI claim readiness before keys, principles, or environments existed.
+- **Alternatives rejected:** keeping repo mode/preset fields (inferable or covered elsewhere);
+  allowing requests before setup (would fail later and fake progress); a separate setup wizard
+  (more clicks, and the checklist already shows exactly what is missing).
+
+### D-022 - Model roles are blank by default; mock adapters live only under `tests/`
+- **Decision:** `caliper/models.yaml` starts with empty `base_url`/`model` for Planning,
+  Execution and Review. The workflow refuses to run with `Models are not configured` until
+  Settings > Models saves three distinct models. `caliper/` contains no mock role adapters;
+  deterministic mocks live in `tests/mock_models.py` and are injected only by tests.
+- **Reason:** AGENTS.md 3 and 12.1. A missing configuration must be visible and must block the
+  action, never silently fall back to a mock. Three distinct models are required so Review does
+  not repeat Planning's or Execution's blind spots.
+- **Alternatives rejected:** keeping mock as the runtime default (fake success); generating
+  placeholder model names (a misleading settings screen); one shared model for all roles
+  (startup validation must reject it).
+
+### D-023 - Safe project deletion + SSE request updates replace `/status` polling
+- **Decision:** `DELETE /api/projects/{id}?stop_dev=bool&stop_prod=bool` removes Caliper's
+  local copy, keys, run history and project row, but never the GitHub repository or its
+  `.caliper/` files. It cancels active requests first; optional undeploys run before any
+  deletion and abort everything on failure; secrets and local files are removed only under the
+  resolved `CALIPER_DATA_DIR/projects/<id>` and `CALIPER_SECRETS_DIR/projects/<id>` paths;
+  DB rows and an audit event are written in one transaction. The UI confirms the action and
+  disables stop switches for unconfigured environments. Request pages subscribe to
+  `GET /api/events` (SSE); the old `/status` poller is no longer loaded by the base template.
+- **Reason:** AGENTS.md 12.7 and 7. A destructive action must be narrow, auditable, undoable
+  where possible, and must not touch the repository the human owns. SSE keeps request states
+  live without polling.
+- **Alternatives rejected:** deleting the GitHub repository (Caliper does not own it);
+  deleting `.caliper/` (principles/decisions/graph must survive); undeploying after local
+  deletion (no keys left to do it); leaving active requests running (orphaned run state);
+  polling every few seconds (extra requests and stale states).
+
+### D-024 - Static assets are versioned; project settings and delete are a visible tab
+- **Decision:** `style.css` and `app.js` are requested with `?v=<mtime>` so a restarted server
+  cannot serve a stale bundle that lacks a new action. The project page has a `Settings` tab
+  whose danger zone contains the delete button and confirmation dialog.
+- **Reason:** The delete dialog existed in the DOM but an old cached `app.js` made the button
+  appear inert. A destructive action must also be findable without scanning the whole page.
+- **Alternatives rejected:** telling the human to hard-refresh after every deploy (easy to
+  forget); renaming the bundle on every build (manual churn); putting delete only in a global
+  menu (loses the project context and the request counts).

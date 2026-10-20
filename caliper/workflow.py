@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 
-from caliper.mock_models import MAX_LOOPS, MockExecutionModel, MockPlanningModel, MockReviewModel, WorkflowError
+MAX_LOOPS = 3
+
+
+class WorkflowError(Exception):
+    pass
 
 
 class MockDeployAdapter:
@@ -30,10 +34,18 @@ class Workflow:
         self.requests = requests
         self.registry = registry
         self.artifacts_root = Path(artifacts_root)
-        self.planning = planning or MockPlanningModel()
-        self.execution = execution or MockExecutionModel()
-        self.review = review or MockReviewModel()
+        self.planning = planning
+        self.execution = execution
+        self.review = review
         self.deploy = deploy or MockDeployAdapter()
+
+    def missing_models(self) -> list[str]:
+        labels = {"planning": "Planning", "execution": "Execution", "review": "Review"}
+        return [labels[role] for role in ("planning", "execution", "review") if getattr(self, role) is None]
+
+    @property
+    def models_configured(self) -> bool:
+        return not self.missing_models()
 
     def artifact_dir(self, req_id: str) -> Path:
         req = self.requests.get(req_id)
@@ -43,6 +55,9 @@ class Workflow:
         return dir
 
     def run(self, req_id: str) -> dict:
+        missing = self.missing_models()
+        if missing:
+            raise WorkflowError("Models are not configured: " + ", ".join(missing) + ". Open Settings > Models.")
         req = self.requests.get(req_id)
         if req is None:
             raise WorkflowError(f"Request '{req_id}' does not exist.")

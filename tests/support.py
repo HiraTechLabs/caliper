@@ -4,6 +4,7 @@ from pathlib import Path
 import yaml
 
 from caliper.principles import PRINCIPLE_ORDER, PRINCIPLE_PREFIXES
+from caliper.registry import ENVIRONMENT_ORDER
 
 
 def make_git_repo(path: Path, branch: str = "main") -> str:
@@ -35,14 +36,7 @@ def make_git_repo(path: Path, branch: str = "main") -> str:
     return path.as_uri()
 
 
-def approve_principles(registry, project_id: str) -> None:
-    """Mark the six principles as approved (two rules each) without touching Git.
-
-    The rules of a real project come from the repository; this shortcut is for the
-    tests that only need the workflow to have approved rule IDs.
-    """
-    path = registry.projects_root / project_id / "manifest.yaml"
-    manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+def _approved_principles(manifest: dict) -> None:
     principles = manifest.setdefault("principles", {})
     for key in PRINCIPLE_ORDER:
         principles[key] = {
@@ -53,4 +47,33 @@ def approve_principles(registry, project_id: str) -> None:
             "updated_at": "2026-01-01T00:00:00+00:00",
             "rule_ids": [f"{PRINCIPLE_PREFIXES[key]}-001", f"{PRINCIPLE_PREFIXES[key]}-002"],
         }
+
+
+def approve_principles(registry, project_id: str) -> None:
+    """Mark the six principles as approved without touching Git."""
+    path = registry.projects_root / project_id / "manifest.yaml"
+    manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+    _approved_principles(manifest)
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+
+def complete_setup(registry, project_id: str) -> None:
+    """Mark a project as fully set up, including verified environments."""
+    path = registry.projects_root / project_id / "manifest.yaml"
+    manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+    manifest["repo"]["url"] = manifest["repo"].get("url") or f"https://github.com/example/{project_id}"
+    manifest["repo"]["verified"] = True
+    manifest["repo"]["test_message"] = "Read and write access verified."
+    _approved_principles(manifest)
+    for env in ENVIRONMENT_ORDER:
+        manifest["environments"][env].update({
+            "host": f"{env}.example.com",
+            "user": "deploy",
+            "deploy_path": "/srv/app",
+            "compose_file": "docker-compose.yml",
+            "health_url": f"https://{env}.example.com/health",
+            "verified": True,
+            "test_message": "SSH and docker compose are reachable.",
+            "host_key_fingerprint": "SHA256:pinned",
+        })
     path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")

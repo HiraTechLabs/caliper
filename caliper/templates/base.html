@@ -4,9 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Caliper{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version|default('1') }}">
+  <script src="/static/app.js?v={{ asset_version|default('1') }}" defer></script>
 </head>
-<body>
+<body data-page="{% block page_id %}app{% endblock %}" data-models-configured="{{ '1' if models_configured is defined and models_configured else '0' }}">
   <div class="layout">
     <aside class="sidebar">
       <div class="sidebar-head">
@@ -20,40 +21,14 @@
         {% endfor %}
         <a class="sidebar-project add" href="/projects/new">+ New project</a>
       </nav>
+      <nav class="sidebar-projects">
+        <a class="sidebar-project" href="/settings/models"><span class="sidebar-label">SETTINGS</span> Models</a>
+      </nav>
     </aside>
     <main class="main">
       {% block content %}{% endblock %}
     </main>
   </div>
-  <script>
-    document.querySelector(".theme-toggle").addEventListener("click", function () {
-      document.documentElement.classList.toggle("dark");
-    });
-    (function poll() {
-      fetch("/status").then(function (r) { return r.json(); }).then(function (data) {
-        var byId = {};
-        data.requests.forEach(function (d) { byId[d.id] = d; });
-        document.querySelectorAll("[data-req-badge='pill']").forEach(function (el) {
-          var d = byId[el.getAttribute("data-req-id")];
-          if (!d) return;
-          var pill = el.querySelector(".pill");
-          if (!pill) return;
-          var map = {
-            submitted: "status-neutral", planning: "status-planning", executing: "status-executing",
-            reviewing: "status-reviewing", awaiting_approval: "status-awaiting", merged: "status-merged",
-            deployed_dev: "status-merged", live: "status-merged", failed: "status-failed"
-          };
-          var labels = { planning: "Planning", executing: "Executing", reviewing: "Reviewing",
-            awaiting_approval: "Awaiting approval", merged: "Merged", deployed_dev: "Merged", live: "Live", failed: "Failed", submitted: "submitted" };
-          pill.className = "pill " + (map[d.status] || "status-neutral");
-          pill.querySelector("span.label").textContent = labels[d.status] || d.status;
-          var extra = el.getAttribute("data-review-progress");
-          if (extra && d.total > 0) {
-            el.querySelector(".review-dots").innerHTML = "&#9679;".repeat(d.fail) + "&#9675;".repeat(Math.max(0, d.total - d.fail));
-          }
-        });
-      }).catch(function () {}).finally(function () { setTimeout(poll, 3000); });
-    })();
-  </script>
+  <div class="toast" data-toast role="status" aria-live="polite" hidden></div>
 </body>
 </html>

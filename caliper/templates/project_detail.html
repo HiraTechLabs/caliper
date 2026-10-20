@@ -4,15 +4,54 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">{{ project.name }}</h1>
-  <span class="pill">{{ project.stack_label }}</span>
-  <a class="btn primary head-action" href="/projects/{{ project.id }}/requests/new">+ New request</a>
+  <div class="head-actions">
+    <a class="btn ghost" href="#settings">Project settings</a>
+    {% if setup_ready %}
+    <a class="btn primary" href="/projects/{{ project.id }}/requests/new">+ New request</a>
+    {% else %}
+    <span class="btn primary disabled" aria-disabled="true" title="Complete: {{ setup_missing|join(', ') }}">Setup needed: {{ setup_missing[0] }}{% if setup_missing|length > 1 %} +{{ setup_missing|length - 1 }}{% endif %}</span>
+    {% endif %}
+  </div>
 </div>
 <p class="muted">
-  {% if project.repo.mode == 'existing' %}Repo: <span class="mono">{{ project.repo.url }}</span>{% else %}Repo: to be created.{% endif %}
+  Repo: <span class="mono">{{ project.repo.url or "not set" }}</span>
   {% if project.product %} Product: <span class="mono">{{ project.product }}</span>{% endif %}
 </p>
 
-<section class="detail-section">
+{% if setup_error %}
+<div class="alert danger" role="alert">{{ setup_error }}</div>
+{% endif %}
+
+<nav class="project-tabs" aria-label="Project sections">
+  <a href="#setup">Setup</a>
+  <a href="#requests">Requests</a>
+  <a href="#repository">Repository</a>
+  <a href="#environments">Environments</a>
+  <a href="#principles">Principles</a>
+  <a href="#settings">Settings</a>
+</nav>
+
+<section class="detail-section" id="setup">
+  <h2>Setup</h2>
+  <p class="muted">Requests stay disabled until all four items are ready.</p>
+  <div class="setup-checklist">
+    {% for item in setup %}
+    {% set anchor = '#repository' if item.key == 'repository' else ('#principles' if item.key == 'principles' else '#environment-' ~ item.key) %}
+    <a class="card setup-item {{ 'ready' if item.ready else 'missing' }}" href="{{ anchor }}">
+      <span class="setup-item-icon">{{ '&#10003;'|safe if item.ready else '&#10005;'|safe }}</span>
+      <span class="setup-item-copy">
+        <strong>{{ item.label }}</strong>
+        <span class="helper">{{ item.reason }}</span>
+      </span>
+      <span class="status-badge tone-{{ 'merged' if item.ready else 'awaiting' }}">
+        <span class="status-badge-inner"><span class="label">{{ "Ready" if item.ready else "Missing" }}</span></span>
+      </span>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="detail-section" id="requests">
   <h2>Requests</h2>
   {% if requests %}
   <ul class="request-list">
@@ -21,7 +60,7 @@
       <a class="request-link" href="/requests/{{ req.id }}">
         {{ status_pill(req.status) }}
         <span class="request-text">{{ req.text[:120] }}</span>
-        <span class="mono muted">{{ req.kind }} · {{ req.id }}</span>
+        <span class="mono muted">{{ req.kind }} &middot; {{ req.id }}</span>
       </a>
     </li>
     {% endfor %}
@@ -29,38 +68,160 @@
   {% else %}
   <div class="empty-state card">
     <div class="empty-icon">&#9997;</div>
-    <p>No requests yet. Tell Caliper what you want — it plans, executes and reviews.</p>
-    <a class="btn primary" href="/projects/{{ project.id }}/requests/new">Add feature</a>
+    <p>No requests yet. Tell Caliper what you want &mdash; it plans, executes and reviews.</p>
+    {% if setup_ready %}<a class="btn primary" href="/projects/{{ project.id }}/requests/new">Add feature</a>{% endif %}
   </div>
   {% endif %}
 </section>
 
-<section class="detail-section">
-  <h2>Environments</h2>
-  <div class="env-grid">
-    <div class="card">
-      <h3>Dev</h3>
-      <p class="muted">Not configured yet.</p>
-      <span class="helper">Every change lands here first.</span>
+<section class="detail-section" id="repository">
+  <div class="section-head">
+    <h2>Repository access</h2>
+    <span class="status-badge tone-{{ 'merged' if project.repo.verified else 'awaiting' }}">
+      <span class="status-badge-inner"><span class="label">{{ "Verified" if project.repo.verified else "Not verified" }}</span></span>
+    </span>
+  </div>
+  <div class="card setup-card">
+    <p class="muted">Caliper uses a project-specific SSH deploy key. Add the public key to the repository with write access, then test.</p>
+    {% if project.repo.public_key %}
+    <label class="field">
+      <span>Public deploy key</span>
+      <textarea class="key-text" rows="3" readonly onclick="this.select()">{{ project.repo.public_key }}</textarea>
+      <span class="helper">{% if project.repo.keys_url %}<a href="{{ project.repo.keys_url }}" target="_blank" rel="noopener">Open the repository deploy keys page</a>. {% endif %}The private key stays under CALIPER_SECRETS_DIR.</span>
+    </label>
+    {% else %}
+    <p class="setup-note">No deploy key yet.</p>
+    {% endif %}
+    <div class="form-actions inline-actions">
+      {% if not project.repo.public_key %}
+      <form method="post" action="/projects/{{ project.id }}/repository/key"><button class="btn secondary" type="submit">Generate deploy key</button></form>
+      {% endif %}
+      {% if project.repo.public_key and project.repo.url %}
+      <form method="post" action="/projects/{{ project.id }}/repository/test"><button class="btn primary" type="submit">Test read/write access</button></form>
+      {% endif %}
     </div>
-    <div class="card">
-      <h3>Prod</h3>
-      <p class="muted">Not configured yet.</p>
-      <span class="helper">Reachable only after human approval.</span>
-    </div>
+    {% if project.repo.test_message %}
+    <div class="setup-note {{ 'ok' if project.repo.verified else 'bad' }}" role="status">{{ project.repo.test_message }}</div>
+    {% endif %}
   </div>
 </section>
 
-<section class="detail-section">
-  <h2>Principles</h2>
-  <p class="muted">Six principle files, numbered and checkable. Plans cite these rule IDs; reviews judge against them.</p>
-  <div class="principles-grid">
-    {% for principle in project.principles %}
-    <details class="card principle-card">
-      <summary>{{ principle.title }}</summary>
-      <pre class="principle-content">{{ principle.content }}</pre>
-    </details>
+<section class="detail-section" id="environments">
+  <h2>Environments</h2>
+  <div class="env-grid">
+    {% for env in ['dev', 'prod'] %}
+    {% set entry = project.environments[env] %}
+    <div class="card env-card" id="environment-{{ env }}">
+      <div class="section-head">
+        <h3>{{ env|capitalize }}</h3>
+        <span class="status-badge tone-{{ 'merged' if entry.verified else 'awaiting' }}">
+          <span class="status-badge-inner"><span class="label">{{ "Verified" if entry.verified else "Not verified" }}</span></span>
+        </span>
+      </div>
+      <p class="helper">{{ "Every change lands here first." if env == 'dev' else "Reachable only after human approval." }}</p>
+      <form method="post" action="/projects/{{ project.id }}/environments/{{ env }}">
+        <div class="field"><label>Host</label><input name="host" value="{{ entry.host }}" placeholder="10.0.0.10" autocomplete="off"></div>
+        <div class="field"><label>SSH user</label><input name="user" value="{{ entry.user }}" placeholder="ubuntu" autocomplete="off"></div>
+        <div class="field"><label>Deploy path</label><input name="deploy_path" value="{{ entry.deploy_path }}" placeholder="/srv/app" autocomplete="off"></div>
+        <div class="field"><label>Compose file</label><input name="compose_file" value="{{ entry.compose_file }}" placeholder="docker-compose.yml" autocomplete="off"></div>
+        <div class="field"><label>Health URL</label><input name="health_url" type="url" value="{{ entry.health_url }}" placeholder="https://dev.example.com/health" autocomplete="off"></div>
+        {% if project.environment_keys[env] %}
+        <label class="field">
+          <span>Public SSH key</span>
+          <textarea class="key-text" rows="3" readonly onclick="this.select()">{{ project.environment_keys[env] }}</textarea>
+          <span class="helper">Add this line to the server user's <span class="mono">authorized_keys</span>.</span>
+        </label>
+        {% endif %}
+        <div class="form-actions inline-actions">
+          <button class="btn secondary" type="submit" name="action" value="save">Save</button>
+          <button class="btn primary" type="submit" name="action" value="test">Test connection</button>
+        </div>
+        <p class="helper">Test saves these fields first, then runs <span class="mono">ssh host true</span> and <span class="mono">docker compose version</span>.</p>
+      </form>
+      {% if entry.test_message %}
+      <div class="setup-note {{ 'ok' if entry.verified else 'bad' }}" role="status">{{ entry.test_message }}</div>
+      {% endif %}
+    </div>
     {% endfor %}
   </div>
 </section>
+
+<section class="detail-section" id="principles">
+  <h2>Principles</h2>
+  <p class="muted">Six principle files, numbered and checkable. Plans cite these rule IDs; reviews judge against them. Approve all six to unlock requests.</p>
+  <div class="principles-grid">
+    {% for principle in project.principles %}
+    <div class="card principle-card">
+      <div class="section-head">
+        <h3>{{ principle.title }}</h3>
+        <span class="status-badge tone-{{ 'merged' if principle.status == 'approved' else 'neutral' }}">
+          <span class="status-badge-inner"><span class="label">{{ "Approved" if principle.status == 'approved' else ("Missing" if principle.status == 'missing' else "Draft") }}</span></span>
+        </span>
+      </div>
+      <pre class="principle-content">{{ principle.content or "No file in the repository yet." }}</pre>
+      <form method="post" action="/projects/{{ project.id }}/principles/{{ principle.key }}">
+        {% if principle.status == 'approved' %}
+        <button class="btn secondary" type="submit" name="action" value="revoke">Revoke approval</button>
+        {% else %}
+        <button class="btn primary" type="submit" name="action" value="approve">Approve</button>
+        {% endif %}
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="detail-section" id="settings" data-project-settings>
+  <h2>Settings</h2>
+  <div class="card danger-zone" data-danger-zone>
+    <div>
+      <h3>Danger zone</h3>
+      <p class="muted">Remove this project from Caliper. The GitHub repository and its <span class="mono">.caliper/</span> files stay untouched.</p>
+    </div>
+    <button class="btn danger" type="button" data-delete-project-open>Delete project</button>
+  </div>
+</section>
+
+<dialog class="dialog" id="delete-project-dialog" aria-labelledby="delete-project-title" aria-describedby="delete-project-summary"
+        data-delete-project-dialog data-project-id="{{ project.id }}" data-project-name="{{ project.name }}">
+  <form method="dialog" class="dialog-card" data-delete-project-form novalidate>
+    <div class="dialog-head">
+      <h2 id="delete-project-title">Delete {{ project.name }}</h2>
+      <button class="icon-btn" type="button" aria-label="Close" data-delete-project-close>&times;</button>
+    </div>
+    <div class="dialog-body">
+      <p id="delete-project-summary">Will be removed: {{ request_count }} request{% if request_count != 1 %}s{% endif %} and their history, local clone and worktrees, deploy key and environment keys.</p>
+      <p>Will stay: the GitHub repository and the <span class="mono">.caliper/</span> files in it.</p>
+      {% if active_requests %}
+      <div class="delete-active">
+        <p><strong>Active requests will be cancelled:</strong></p>
+        <ul>
+          {% for req in active_requests %}
+          <li><span class="mono">{{ req.id }}</span> {{ req.text[:80] }} &mdash; will be cancelled</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      <div class="delete-switches">
+        <label class="checkline"><input type="checkbox" data-stop-dev {% if not stop_ready.dev %}disabled{% endif %}> Stop Dev deployment
+          {% if not stop_ready.dev %}<span class="helper">Not configured. <a href="#environment-dev">Configure Dev</a> to stop it.</span>{% endif %}
+        </label>
+        <label class="checkline"><input type="checkbox" data-stop-prod {% if not stop_ready.prod %}disabled{% endif %}> Stop Prod deployment
+          <span class="helper danger-text">Stops the live deployment. Volumes are kept.</span>
+          {% if not stop_ready.prod %}<span class="helper">Not configured. <a href="#environment-prod">Configure Prod</a> to stop it.</span>{% endif %}
+        </label>
+        <p class="helper">Volumes are never deleted.</p>
+      </div>
+      <label class="field">
+        <span>Type <strong>{{ project.name }}</strong> to confirm</span>
+        <input type="text" data-delete-project-confirm autocomplete="off" autocapitalize="off" spellcheck="false">
+      </label>
+      <div class="alert danger" role="alert" data-delete-project-error hidden></div>
+    </div>
+    <div class="dialog-actions">
+      <button class="btn ghost" type="button" data-delete-project-close>Cancel</button>
+      <button class="btn danger" type="submit" data-delete-project-submit disabled>Delete project</button>
+    </div>
+  </form>
+</dialog>
 {% endblock %}

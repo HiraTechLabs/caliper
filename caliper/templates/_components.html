@@ -1,6 +1,21 @@
+{% macro icon(name) -%}
+{%- if name == 'list' -%}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
+{%- elif name == 'code' -%}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>
+{%- elif name == 'search' -%}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="m8 11 2 2 4-4"/></svg>
+{%- elif name == 'hand' -%}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
+{%- elif name == 'check' -%}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+{%- elif name == 'x' -%}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>
+{%- endif -%}
+{%- endmacro %}
+
 {% macro project_row(p) %}
 <span class="project-name">{{ p.name }}</span>
-<span class="muted">{{ p.stack_label }}</span>
 {% endmacro %}
 
 {% macro composer(project, action, error=None, values={}) %}
@@ -27,20 +42,23 @@
 </form>
 {% endmacro %}
 
-{% macro status_pill(status) %}
-  {% set labels = {
-    'submitted': ['submitted', 'pill status-neutral'],
-    'planning': ['Planning', 'pill status-planning'],
-    'executing': ['Executing', 'pill status-executing'],
-    'reviewing': ['Reviewing', 'pill status-reviewing'],
-    'awaiting_approval': ['Awaiting approval', 'pill status-awaiting'],
-    'merged': ['Merged', 'pill status-merged'],
-    'deployed_dev': ['Merged', 'pill status-merged'],
-    'live': ['Live', 'pill status-merged'],
-    'failed': ['Failed', 'pill status-failed']
+{% macro status_pill(status, req_id=None) %}
+  {% set meta = {
+    'submitted': ['submitted', 'neutral', 'list'],
+    'planning': ['Planning', 'planning', 'list'],
+    'executing': ['Executing', 'executing', 'code'],
+    'reviewing': ['Reviewing', 'reviewing', 'search'],
+    'awaiting_approval': ['Awaiting approval', 'awaiting', 'hand'],
+    'merged': ['Merged', 'merged', 'check'],
+    'deployed_dev': ['Merged', 'merged', 'check'],
+    'live': ['Live', 'merged', 'check'],
+    'failed': ['Failed', 'failed', 'x'],
+    'cancelled': ['Cancelled', 'neutral', 'x']
   } %}
-  {% set pill = labels.get(status, [status, 'pill status-neutral']) %}
-  <span class="{{ pill[1] }}"><span class="dot"></span><span class="label">{{ pill[0] }}</span></span>
+  {% set item = meta.get(status, [status, 'neutral', 'list']) %}
+  <span class="status-badge tone-{{ item[1] }}" data-status-badge data-status="{{ status }}"{% if req_id %} data-req-id="{{ req_id }}"{% endif %}>
+    <span class="status-badge-inner"><span class="status-icon">{{ icon(item[2]) }}</span><span class="label">{{ item[0] }}</span></span>
+  </span>
 {% endmacro %}
 
 {% macro stepper(status) %}
@@ -51,11 +69,64 @@
     'failed': 2
   } %}
   {% set active = active_map.get(status, -1) %}
-  <ol class="stepper">
+  <ol class="stepper" data-stepper data-status="{{ status }}">
     {% for step in steps %}
     <li class="step {{ 'active' if loop.index0 == active }} {{ 'failed' if status == 'failed' and step == 'review' }}">
       <span class="step-dot"></span>{{ step|capitalize() }}
     </li>
     {% endfor %}
   </ol>
+{% endmacro %}
+
+{% macro factory_floor(status, compact=False) %}
+  {% set rank_map = {'submitted': 0, 'planning': 1, 'executing': 2, 'reviewing': 3, 'awaiting_approval': 4, 'merged': 5, 'deployed_dev': 5, 'live': 6, 'failed': 3} %}
+  {% set rank = rank_map.get(status, 0) %}
+  {% set active_map = {'planning': 0, 'executing': 1, 'reviewing': 2, 'awaiting_approval': 3, 'failed': 2} %}
+  {% set active = active_map.get(status, -1) %}
+  {% set stations = [('planning', 'Planning', 'list'), ('executing', 'Executing', 'code'), ('reviewing', 'Reviewing', 'search'), ('approval', 'Approval', 'hand')] %}
+  <div class="factory-floor{% if compact %} compact{% endif %}" data-factory-floor data-status="{{ status }}" aria-label="Workflow factory floor">
+    <div class="factory-stations">
+      {% for key, label, icon_name in stations %}
+        {% set i = loop.index0 %}
+        {% set st = 'pending' %}
+        {% set tone = 'pending' %}
+        {% if status == 'failed' %}
+          {% if i < 2 %}{% set st = 'done' %}{% set tone = 'merged' %}{% elif i == 2 %}{% set st = 'failed' %}{% set tone = 'failed' %}{% endif %}
+        {% elif status in ['merged', 'deployed_dev', 'live'] %}
+          {% set st = 'done' %}{% set tone = 'merged' %}
+        {% elif i < active %}
+          {% set st = 'done' %}{% set tone = 'merged' %}
+        {% elif i == active %}
+          {% set st = 'active' %}{% set tone = status if status != 'awaiting_approval' else 'awaiting' %}
+        {% endif %}
+        {% set result = '' %}
+        {% if st == 'done' and i == 0 %}{% set result = 'Plan ready' %}{% endif %}
+        {% if st == 'done' and i == 1 %}{% set result = 'Diff ready' %}{% endif %}
+        {% if st == 'done' and i == 2 %}{% set result = 'Verdict ready' %}{% endif %}
+        {% if st == 'failed' %}{% set result = 'Rules failed' %}{% endif %}
+        {% if st == 'active' and i == 0 %}{% set result = 'Planning now' %}{% endif %}
+        {% if st == 'active' and i == 1 %}{% set result = 'Executing now' %}{% endif %}
+        {% if st == 'active' and i == 2 %}{% set result = 'Reviewing now' %}{% endif %}
+        {% if st == 'active' and i == 3 %}{% set result = 'Needs you' %}{% endif %}
+        {% if st == 'done' and i == 3 %}{% set result = 'Live' if status == 'live' else 'Merged' %}{% endif %}
+        {% if status == 'submitted' and i == 0 %}{% set result = 'Queued' %}{% endif %}
+        {% set progress = 1 if st == 'done' or st == 'failed' else (0.55 if st == 'active' else 0) %}
+        <div class="factory-station is-{{ st }} tone-{{ tone }}" data-station="{{ key }}" data-tone="{{ tone }}">
+          <span class="station-ring"></span>
+          <span class="station-icon">{{ icon(icon_name) }}</span>
+          <span class="station-name">{{ label }}</span>
+          <span class="station-result" data-station-result>{{ result }}</span>
+          <span class="station-progress" aria-hidden="true"><span class="station-progress-bar" style="transform: scaleX({{ progress }})"></span></span>
+        </div>
+      {% endfor %}
+    </div>
+    <div class="factory-lane" data-factory-lane>
+      <span class="lane-line"></span>
+      <span class="lane-artifacts">
+        <span class="artifact-chip plan{% if rank < 2 %} hidden{% endif %}" data-artifact-chip="plan">plan</span>
+        <span class="artifact-chip diff{% if rank < 3 %} hidden{% endif %}" data-artifact-chip="diff">diff</span>
+        <span class="artifact-chip verdict{% if rank < 4 and status != 'failed' %} hidden{% endif %}" data-artifact-chip="verdict">verdict</span>
+      </span>
+    </div>
+  </div>
 {% endmacro %}

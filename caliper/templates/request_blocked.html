@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Finish setup - {{ project.name }} - Caliper{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Finish setup first</h1>
+  <span class="pill">{{ project.name }}</span>
+</div>
+<p class="muted">Caliper cannot accept a request until this project has everything the workflow needs.</p>
+<div class="card setup-blocked">
+  <h2>Still missing</h2>
+  <ul>
+    {% for item in missing %}<li>{{ item }}</li>{% endfor %}
+  </ul>
+  <a class="btn primary" href="/projects/{{ project.id }}#setup">Open setup checklist</a>
+</div>
+{% endblock %}

@@ -1,55 +1,59 @@
 import pytest
 import yaml
 
-from caliper.models_config import ROLE_ORDER, ModelsConfigError, load_models_config, validate_models_config
+from caliper.models_config import ModelsConfigError, ModelsNotConfigured, ModelsSettings, ROLE_ORDER
 
 
-def _config(**adapters) -> dict:
-    result = {}
-    for role in ROLE_ORDER:
-        adapter = adapters.get(role, "mock")
-        entry = {"model": f"{role}-model", "adapter": adapter}
-        if adapter == "http":
-            entry["base_url"] = "http://127.0.0.1:9999/v1"
-        result[role] = entry
-    return result
+def _settings(tmp_path):
+    return ModelsSettings(tmp_path / "models.yaml", tmp_path / "secrets")
 
 
-def test_valid_config_passes(tmp_path):
-    path = tmp_path / "models.yaml"
-    path.write_text(yaml.safe_dump(_config()))
-    config = load_models_config(path)
-    assert config["planning"]["model"] != config["review"]["model"]
+def _entries(**models):
+    return {
+        role: {
+            "base_url": f"http://127.0.0.1:{9000 + index}/v1",
+            "model": models.get(role, f"{role}-model"),
+        }
+        for index, role in enumerate(ROLE_ORDER)
+    }
 
 
-def test_missing_file_fails(tmp_path):
-    with pytest.raises(ModelsConfigError, match="not found"):
-        load_models_config(tmp_path / "absent.yaml")
+def test_save_persists_models_and_keys_outside_yaml(tmp_path):
+    settings = _settings(tmp_path)
+    settings.save(_entries(), keys={"planning": "sk-planning"})
+
+    stored = yaml.safe_load(settings.path.read_text(encoding="utf-8"))
+    assert stored["planning"]["model"] == "planning-model"
+    assert "sk-planning" not in settings.path.read_text(encoding="utf-8")
+    assert settings.api_key("planning") == "sk-planning"
+    assert settings.configured() is True
 
 
-def test_duplicate_roles_config_fails(tmp_path):
-    broken = _config()
-    broken["review"]["model"] = broken["planning"]["model"]
+def test_duplicate_roles_are_rejected(tmp_path):
+    settings = _settings(tmp_path)
     with pytest.raises(ModelsConfigError, match="DIFFERENT"):
-        validate_models_config(broken)
+        settings.save(_entries(planning="same", execution="same"))
 
 
-def test_unknown_adapter_fails():
-    config = _config()
-    config["execution"]["adapter"] = "openai"
-    with pytest.raises(ModelsConfigError, match="adapter"):
-        validate_models_config(config)
+def test_partial_role_is_rejected(tmp_path):
+    settings = _settings(tmp_path)
+    entries = _entries()
+    entries["review"]["base_url"] = ""
+    with pytest.raises(ModelsConfigError, match="together"):
+        settings.save(entries)
 
 
-def test_http_adapter_requires_base_url():
-    config = _config(execution="http")
-    config["execution"].pop("base_url")
-    with pytest.raises(ModelsConfigError, match="base_url"):
-        validate_models_config(config)
+def test_missing_file_is_unconfigured(tmp_path):
+    settings = _settings(tmp_path)
+    assert settings.configured() is False
+    assert settings.missing_roles() == ["Planning", "Execution", "Review"]
+    with pytest.raises(ModelsNotConfigured, match="not configured"):
+        settings.make_adapters()
 
 
-def test_missing_role_fails():
-    config = _config()
-    config.pop("review")
-    with pytest.raises(ModelsConfigError, match="roles"):
-        validate_models_config(config)
+def test_saved_config_builds_three_distinct_http_adapters(tmp_path):
+    settings = _settings(tmp_path)
+    settings.save(_entries())
+    adapters = settings.make_adapters()
+    assert set(adapters) == set(ROLE_ORDER)
+    assert len({adapter.__class__ for adapter in adapters.values()}) == 3

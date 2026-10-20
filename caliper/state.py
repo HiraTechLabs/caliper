@@ -1,8 +1,10 @@
 import datetime
+import json
 import sqlite3
 import threading
 
 VALID_KINDS = ("feature", "bugfix")
+ACTIVE_STATUSES = ("submitted", "planning", "executing", "reviewing", "awaiting_approval", "merged", "deployed_dev")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -16,6 +18,13 @@ CREATE TABLE IF NOT EXISTS requests (
     review_note TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    project_name TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    details TEXT NOT NULL
 );
 """
 
@@ -33,8 +42,17 @@ class RequestStore:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute(SCHEMA)
+        self._conn.executescript(SCHEMA)
         self._conn.commit()
+        self.on_change = None
+
+    def _notify(self, change: str, req: dict) -> None:
+        if self.on_change is None:
+            return
+        try:
+            self.on_change(change, req)
+        except Exception:
+            pass
 
     def create(self, project_id: str, kind: str, text: str, extra: str | None = None) -> dict:
         if kind not in VALID_KINDS:
@@ -51,7 +69,9 @@ class RequestStore:
                 (req_id, project_id, kind, text.strip(), extra, "submitted", now, now),
             )
             self._conn.commit()
-        return self.get(req_id)
+        req = self.get(req_id)
+        self._notify("created", req)
+        return req
 
     def get(self, req_id: str) -> dict | None:
         row = self._conn.execute("SELECT * FROM requests WHERE id = ?", (req_id,)).fetchone()
@@ -79,4 +99,56 @@ class RequestStore:
             if cur.rowcount == 0:
                 raise ValueError(f"Request '{req_id}' does not exist.")
             self._conn.commit()
-        return self.get(req_id)
+        req = self.get(req_id)
+        self._notify("updated", req)
+        return req
+
+    def cancel_active_for_project(self, project_id: str) -> list[dict]:
+        with self._lock:
+            placeholders = ",".join("?" for _ in ACTIVE_STATUSES)
+            rows = self._conn.execute(
+                f"SELECT * FROM requests WHERE project_id = ? AND status IN ({placeholders})",
+                (project_id, *ACTIVE_STATUSES),
+            ).fetchall()
+            previous = [dict(row) for row in rows]
+            if previous:
+                now = _now()
+                self._conn.executemany(
+                    "UPDATE requests SET status = 'cancelled', updated_at = ? WHERE id = ?",
+                    [(now, row["id"]) for row in previous],
+                )
+                self._conn.commit()
+        for row in previous:
+            req = self.get(row["id"])
+            if req is not None:
+                self._notify("updated", req)
+        return previous
+
+    def restore_requests(self, previous: list[dict]) -> None:
+        if not previous:
+            return
+        with self._lock:
+            self._conn.executemany(
+                "UPDATE requests SET status = ?, updated_at = ? WHERE id = ?",
+                [(row["status"], row["updated_at"], row["id"]) for row in previous],
+            )
+            self._conn.commit()
+        for row in previous:
+            req = self.get(row["id"])
+            if req is not None:
+                self._notify("updated", req)
+
+    def delete_project_with_audit(self, project_id: str, project_name: str, details: dict) -> int:
+        now = _now()
+        with self._lock:
+            try:
+                self._conn.execute("DELETE FROM requests WHERE project_id = ?", (project_id,))
+                cursor = self._conn.execute(
+                    "INSERT INTO audit_events (project_id, project_name, occurred_at, details) VALUES (?,?,?,?)",
+                    (project_id, project_name, now, json.dumps(details, sort_keys=True)),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+            return int(cursor.lastrowid)

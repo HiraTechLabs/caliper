@@ -24,8 +24,6 @@ from caliper.remote import (
     test_repository,
 )
 
-STACK_PRESETS = {"python-fastapi": "Python + FastAPI"}
-
 ENVIRONMENT_ORDER = ("dev", "prod")
 
 ENVIRONMENT_DEFAULTS = {
@@ -51,15 +49,12 @@ def _now() -> str:
     return datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
 
 
-def manifest_defaults(id: str, name: str, repo_mode: str, repo_url: str | None,
-                       stack_preset: str, product: str | None) -> dict:
+def manifest_defaults(id: str, name: str, repo_url: str, product: str | None) -> dict:
     return {
         "id": id,
         "name": name,
         "created_at": _now(),
-        "stack_preset": stack_preset,
         "repo": {
-            "mode": repo_mode,
             "url": repo_url,
             "verified": False,
             "verified_at": None,
@@ -116,9 +111,7 @@ class ProjectRegistry:
         if not path.is_file():
             raise ProjectError(f"Project '{project_id}' does not exist.")
         manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        manifest.setdefault("stack_preset", "")
         repo = manifest.setdefault("repo", {})
-        repo.setdefault("mode", "existing")
         repo.setdefault("url", None)
         repo.setdefault("verified", False)
         repo.setdefault("verified_at", None)
@@ -216,16 +209,11 @@ class ProjectRegistry:
                     ids.append(rule_id)
         return ids
 
-    def create_project(self, name: str, repo_mode: str, repo_url: str | None = None,
-                       stack_preset: str = "python-fastapi", product: str | None = None) -> dict:
+    def create_project(self, name: str, repo_url: str, product: str | None = None) -> dict:
         if not name or not name.strip():
             raise ProjectError("Project name is required.")
-        if repo_mode not in ("create_new", "existing"):
-            raise ProjectError("Repository mode must be 'create_new' or 'existing'.")
-        if stack_preset not in STACK_PRESETS:
-            raise ProjectError(f"Unknown stack preset '{stack_preset}'.")
-        if repo_mode == "existing" and not (repo_url and repo_url.strip()):
-            raise ProjectError("Repository URL is required when using an existing repository.")
+        if not repo_url or not repo_url.strip():
+            raise ProjectError("Repository URL is required.")
 
         project_id = self.slugify(name)
         dir = self._project_dir(project_id)
@@ -233,9 +221,7 @@ class ProjectRegistry:
             raise ProjectError(f"Project '{project_id}' already exists.")
 
         manifest = manifest_defaults(
-            id=project_id, name=name.strip(), repo_mode=repo_mode,
-            repo_url=repo_url.strip() if repo_url and repo_url.strip() else None,
-            stack_preset=stack_preset, product=product,
+            id=project_id, name=name.strip(), repo_url=repo_url.strip(), product=product,
         )
         dir.mkdir(parents=True, exist_ok=False)
         self._write_manifest(project_id, manifest)
@@ -433,6 +419,49 @@ class ProjectRegistry:
             entry["test_message"] = str(exc)
             self._write_manifest(project_id, manifest)
             return False, str(exc)
+
+    def setup_status(self, manifest: dict) -> list[dict]:
+        repo = manifest.get("repo") or {}
+        records = manifest.get("principles_records") or {}
+        environments = manifest.get("environments") or {}
+        approved = sum(1 for key in PRINCIPLE_ORDER if (records.get(key) or {}).get("state") == APPROVED)
+        repo_ready = bool(repo.get("url")) and bool(repo.get("verified"))
+        principles_ready = approved == len(PRINCIPLE_ORDER)
+        items = [
+            {
+                "key": "repository",
+                "label": "Repository access",
+                "ready": repo_ready,
+                "reason": "Ready." if repo_ready else (
+                    "Add a repository URL." if not repo.get("url")
+                    else "Generate the deploy key and test read/write access."
+                ),
+            },
+            {
+                "key": "principles",
+                "label": "Principles",
+                "ready": principles_ready,
+                "reason": "All 6 approved." if principles_ready else f"{approved} of {len(PRINCIPLE_ORDER)} approved.",
+            },
+        ]
+        for env in ENVIRONMENT_ORDER:
+            entry = environments.get(env) or {}
+            ready = all(entry.get(key) for key in (
+                "host", "user", "deploy_path", "compose_file", "health_url",
+            )) and bool(entry.get("verified"))
+            items.append({
+                "key": env,
+                "label": f"{env.capitalize()} environment",
+                "ready": ready,
+                "reason": "Ready." if ready else "Configure the fields and test the connection.",
+            })
+        return items
+
+    def setup_missing(self, manifest: dict) -> list[str]:
+        return [item["label"] for item in self.setup_status(manifest) if not item["ready"]]
+
+    def setup_complete(self, manifest: dict) -> bool:
+        return not self.setup_missing(manifest)
 
     @staticmethod
     def _read_tester_result(result) -> tuple[str, str | None]:

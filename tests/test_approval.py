@@ -2,18 +2,24 @@ import pytest
 from fastapi.testclient import TestClient
 
 from caliper.main import create_app
+from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel
 from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
-from tests.support import approve_principles
+from caliper.workflow import Workflow
+from tests.support import complete_setup
 
 
 @pytest.fixture()
 def setup(tmp_path):
     registry = ProjectRegistry(tmp_path / "projects")
-    registry.create_project(name="Shop API", repo_mode="create_new")
-    approve_principles(registry, "shop-api")
+    registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    complete_setup(registry, "shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
-    client = TestClient(create_app(registry=registry, requests=requests))
+    workflow = Workflow(
+        requests, registry, tmp_path / "projects",
+        planning=MockPlanningModel(), execution=MockExecutionModel(), review=MockReviewModel(),
+    )
+    client = TestClient(create_app(registry=registry, requests=requests, workflow=workflow))
     return client, tmp_path, requests
 
 

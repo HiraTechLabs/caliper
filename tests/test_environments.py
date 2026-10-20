@@ -53,7 +53,7 @@ def registry(tmp_path):
     registry = ProjectRegistry(
         tmp_path / "projects", secrets_dir=tmp_path / "secrets", key_generator=_key_generator
     )
-    registry.create_project(name="Shop API", repo_mode="existing", repo_url="https://github.com/example/shop-api")
+    registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
     return registry
 
 

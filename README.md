@@ -53,6 +53,24 @@ the exact fix command.
 The repository itself uses a per-project deploy key (ed25519) and a read/write probe
 (`git ls-remote` plus a push dry-run).
 
+The project page shows a setup checklist: Repository access, Principles (6), Dev environment,
+Prod environment. Requests stay disabled until all four are complete, and the button names the
+missing item.
+
+## Models
+
+AI roles are disabled until Settings > Models has three distinct models (Planning, Execution,
+Review) with an OpenAI-compatible base URL and model name. A missing configuration blocks the
+workflow with a link to Settings; there is no runtime mock fallback.
+
+## Remove a project
+
+`DELETE /api/projects/{id}?stop_dev=false&stop_prod=false` removes the project from Caliper:
+active requests are cancelled, run history and local files/keys are removed, and an audit
+event is kept. The GitHub repository and its `.caliper/` files are never deleted. Optional
+Dev/Prod stop runs before any deletion and aborts everything if it fails. After deletion,
+remove the deploy key from the GitHub repository settings yourself.
+
 ## Run tests (one command)
 
 ```
@@ -91,8 +109,8 @@ CI has exactly three jobs (to be wired as they become relevant):
 
 ## Status
 
-Step 9 done (end-to-end mock workflow): projects, request intake, planning/execution/review
-pipeline with mock adapters (real OpenAI-compatible adapters wired but disabled by default),
-review loop with 3-attempt limit, human approval gate -> merge -> Dev -> second gate -> Prod,
-dashboard with live status polling. Real SSH/docker deploy and git branch/merge are the next
-milestone items (see docs/DECISIONS.md, D-016/D-017).
+The workflow runs end-to-end with configured OpenAI-compatible models: project setup checklist,
+request intake, planning/execution/review, review loop with a 3-attempt limit, human approval
+gate -> merge -> Dev -> second gate -> Prod, safe project deletion, and SSE request updates.
+Mock adapters exist only under `tests/`. Real SSH/docker deploy and real Git branch/merge are
+still deferred (see docs/DECISIONS.md, D-017).

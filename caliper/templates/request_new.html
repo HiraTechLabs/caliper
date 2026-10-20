@@ -6,7 +6,8 @@
 {% if error %}
 <div class="alert danger" role="alert">{{ error }}</div>
 {% endif %}
-<form class="form card" method="post" action="/requests/new">
+<form class="form card" method="post" action="{{ form_action or '/requests/new' }}">
+  {% if not project %}
   <div class="field">
     <label for="project_id">Project</label>
     <select id="project_id" name="project_id">
@@ -15,6 +16,7 @@
       {% endfor %}
     </select>
   </div>
+  {% endif %}
   <div class="segmented">
     <label><input type="radio" name="kind" value="feature" {% if not values.get('kind') == 'bugfix' %}checked{% endif %}> Feature</label>
     <label><input type="radio" name="kind" value="bugfix" {% if values.get('kind') == 'bugfix' %}checked{% endif %}> Bug</label>

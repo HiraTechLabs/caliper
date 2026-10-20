@@ -31,7 +31,7 @@ def test_project_list_empty_state(client):
 def test_create_project_via_form_shows_in_list_and_detail(client):
     response = client.post(
         "/projects/new",
-        data={"name": "Shop API", "repo_mode": "existing", "repo_url": "https://git.example.com/shop/api.git", "stack_preset": "python-fastapi"},
+        data={"name": "Shop API", "repo_url": "https://git.example.com/shop/api.git"},
         follow_redirects=True,
     )
     assert response.status_code == 200
@@ -51,20 +51,20 @@ def test_create_project_via_form_shows_in_list_and_detail(client):
     assert "SEC-001" not in detail.text
 
 
-def test_create_new_repo_shows_repo_pending(client):
+def test_create_project_requires_existing_repo_url(client):
     response = client.post(
         "/projects/new",
-        data={"name": "Fresh App", "repo_mode": "create_new", "repo_url": "", "stack_preset": "python-fastapi"},
-        follow_redirects=True,
+        data={"name": "Fresh App", "repo_url": ""},
     )
-    assert response.status_code == 200
-    assert "to be created" in response.text
+    assert response.status_code == 422
+    assert "Repository URL is required" in response.text
+    assert "Stack preset" not in response.text
 
 
 def test_form_error_is_shown_not_stacktrace(client):
     response = client.post(
         "/projects/new",
-        data={"name": "", "repo_mode": "create_new", "repo_url": "", "stack_preset": "python-fastapi"},
+        data={"name": "", "repo_url": "https://git.example.com/a/b.git"},
     )
     assert response.status_code == 422
     assert "Project name is required" in response.text

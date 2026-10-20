@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Models - Settings - Caliper{% endblock %}
+{% block page_id %}settings{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Settings</h1>
+  <span class="pill">Models</span>
+</div>
+<p class="muted">Three roles, three different models. Each role calls an OpenAI-compatible <span class="mono">/chat/completions</span> endpoint.</p>
+
+{% if saved %}
+<div class="setup-note ok" role="status">Models saved. Requests can run when all three roles are configured.</div>
+{% endif %}
+{% if error %}
+<div class="alert" role="alert">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/settings/models" data-native>
+  <div class="settings-stack">
+    {% for role in ["planning", "execution", "review"] %}
+    {% set model = models[role] %}
+    <section class="card settings-card">
+      <div class="settings-card-head">
+        <div>
+          <h2>{{ model.label }}</h2>
+          <p class="muted">{{ {
+            "planning": "Turns the request and principles into a plan that cites rule IDs.",
+            "execution": "Turns the plan into a change on the request branch.",
+            "review": "Judges the diff against every rule ID. Must not see Execution's reasoning."
+          }[role] }}</p>
+        </div>
+        <span class="status-badge tone-{{ 'merged' if model.configured else 'neutral' }}" data-status="{{ 'configured' if model.configured else 'not_configured' }}">
+          <span class="status-badge-inner">
+            <span class="status-icon">{% if model.configured %}&#10003;{% else %}&#8226;{% endif %}</span>
+            <span class="label">{{ "Configured" if model.configured else "Not configured" }}</span>
+          </span>
+        </span>
+      </div>
+      <div class="settings-grid">
+        <label class="field">
+          <span>Base URL</span>
+          <input type="url" name="{{ role }}_base_url" value="{{ model.base_url }}" placeholder="http://127.0.0.1:8000/v1" autocomplete="off">
+          <span class="helper">OpenAI-compatible base URL, usually ending in <span class="mono">/v1</span>.</span>
+        </label>
+        <label class="field">
+          <span>Model name</span>
+          <input type="text" name="{{ role }}_model" value="{{ model.model }}" placeholder="e.g. qwen3-coder" autocomplete="off">
+          <span class="helper">The exact model id sent to the endpoint.</span>
+        </label>
+        <label class="field">
+          <span>API key</span>
+          <input type="password" name="{{ role }}_api_key" value="" placeholder="{{ '******** saved' if model.has_api_key else 'optional for local runtimes' }}" autocomplete="new-password">
+          <span class="helper">{% if model.has_api_key %}A key is saved. Leave blank to keep it.{% else %}Stored outside the repo and database.{% endif %}</span>
+        </label>
+      </div>
+      <div class="settings-card-foot">
+        <label class="checkline">
+          <input type="checkbox" name="{{ role }}_clear_key">
+          <span>Clear saved key</span>
+        </label>
+        <div class="settings-test">
+          <button class="btn secondary" type="submit" name="action" value="test:{{ role }}" formaction="/settings/models/test">Test connection</button>
+          <span class="helper">Saves these fields first.</span>
+        </div>
+      </div>
+      {% if test_result and test_result.role == role %}
+      <div class="setup-note {{ 'ok' if test_result.ok else 'bad' }}" role="status">
+        <strong>{{ "Connection OK" if test_result.ok else "Connection failed" }}.</strong> {{ test_result.message }}
+      </div>
+      {% endif %}
+    </section>
+    {% endfor %}
+  </div>
+
+  <div class="form-actions settings-save">
+    <span class="helper">Saving writes non-secret settings to <span class="mono">CALIPER_MODELS_CONFIG</span>; keys stay under <span class="mono">CALIPER_SECRETS_DIR</span>.</span>
+    <button class="btn primary" type="submit" name="action" value="save">Save models</button>
+  </div>
+</form>
+{% endblock %}

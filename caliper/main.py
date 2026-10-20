@@ -1,54 +1,186 @@
+import asyncio
 import json
 import os
+import queue
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from caliper.deletion import ProjectDeleteError, ProjectDeleter
+from caliper.events import EventBus
 from caliper.principles import PrinciplesError, PrinciplesService
-from caliper.registry import ENVIRONMENT_ORDER, STACK_PRESETS, ProjectError, ProjectRegistry
-from caliper.state import VALID_KINDS, RequestStore
+from caliper.models_config import ROLE_ORDER, ModelsConfigError, ModelsSettings, probe_role
+from caliper.registry import ENVIRONMENT_ORDER, ProjectError, ProjectRegistry
+from caliper.state import ACTIVE_STATUSES, VALID_KINDS, RequestStore
 
 BASE_DIR = Path(__file__).resolve().parent
 
 
 def create_app(registry: ProjectRegistry | None = None, requests: RequestStore | None = None,
-               workflow=None, principles: PrinciplesService | None = None) -> FastAPI:
+               workflow=None, principles: PrinciplesService | None = None,
+               models_settings: ModelsSettings | None = None, probe=None,
+               project_deleter: ProjectDeleter | None = None) -> FastAPI:
     if registry is None:
-        projects_root = os.environ.get("CALIPER_PROJECTS_ROOT", str(BASE_DIR.parent / "projects"))
-        registry = ProjectRegistry(Path(projects_root))
+        data_dir = Path(os.environ.get("CALIPER_DATA_DIR", str(BASE_DIR.parent)))
+        projects_root = Path(os.environ.get("CALIPER_PROJECTS_ROOT", str(data_dir / "projects")))
+        registry = ProjectRegistry(projects_root)
+    else:
+        data_dir = Path(registry.projects_root).parent
     if requests is None:
-        db_path = os.environ.get("CALIPER_DB_PATH", str(BASE_DIR.parent / ".caliper-state" / "state.sqlite3"))
+        db_path = os.environ.get("CALIPER_DB_PATH", str(data_dir / ".caliper-state" / "state.sqlite3"))
         requests = RequestStore(db_path)
     if principles is None:
         principles = PrinciplesService(registry)
+    bus = EventBus()
+    requests.on_change = lambda change, req: bus.publish({"change": change, "id": req["id"], "request": req})
+    if project_deleter is None:
+        project_deleter = ProjectDeleter(registry, requests, data_dir)
 
-    from caliper.models_config import load_models_config, make_adapters
     from caliper.workflow import Workflow
-    models_config_path = os.environ.get("CALIPER_MODELS_CONFIG", str(BASE_DIR / "models.yaml"))
-    config = load_models_config(models_config_path)
-    adapters = make_adapters(config)
+    settings = models_settings or ModelsSettings()
+    probe_model = probe or probe_role
     artifacts_root_override = os.environ.get("CALIPER_ARTIFACTS_ROOT")
     artifacts_root = Path(artifacts_root_override) if artifacts_root_override else Path(registry.projects_root)
+    workflow_injected = workflow is not None
+
+    def build_workflow():
+        if settings.configured():
+            adapters = settings.make_adapters()
+            return Workflow(requests, registry, artifacts_root, planning=adapters["planning"], execution=adapters["execution"], review=adapters["review"])
+        return Workflow(requests, registry, artifacts_root)
+
     if workflow is None:
-        workflow = Workflow(requests, registry, artifacts_root, planning=adapters["planning"], execution=adapters["execution"], review=adapters["review"])
+        workflow = build_workflow()
 
     app = FastAPI(title="Caliper", version="0.1.0")
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=BASE_DIR / "templates")
+    static_dir = BASE_DIR / "static"
+
+    def _asset_version() -> str:
+        try:
+            return str(int(max((static_dir / name).stat().st_mtime for name in ("style.css", "app.js"))))
+        except OSError:
+            return "1"
 
     def _ui_ctx(**extra):
         projects = registry.list_projects()
-        for project in projects:
-            project["stack_label"] = STACK_PRESETS.get(project.get("stack_preset") or "", "")
-        return {"projects": projects, **extra}
+        return {
+            "projects": projects,
+            "models_configured": workflow.models_configured,
+            "models_missing": workflow.missing_models(),
+            "asset_version": _asset_version(),
+            **extra,
+        }
+
+    def _request_payload(req: dict, include_artifacts: bool = False) -> dict:
+        entry = {key: req[key] for key in (
+            "id", "project_id", "kind", "text", "status", "loop_count",
+            "review_note", "created_at", "updated_at",
+        )}
+        try:
+            artifact_dir = workflow.artifact_dir(req["id"])
+        except Exception:
+            artifact_dir = Path("__missing__")
+        review = None
+        review_file = artifact_dir / "review.json"
+        if review_file.is_file():
+            try:
+                review = json.loads(review_file.read_text(encoding="utf-8"))["verdicts"]
+            except Exception:
+                review = None
+        entry["review"] = review
+        entry["pass_count"] = sum(1 for v in (review or {}).values() if v.get("status") == "pass")
+        entry["fail_count"] = sum(1 for v in (review or {}).values() if v.get("status") == "fail")
+        entry["has_plan"] = (artifact_dir / "plan.md").is_file()
+        entry["has_diff"] = (artifact_dir / "diff.patch").is_file()
+        if include_artifacts:
+            for name, key in (("plan.md", "plan"), ("diff.patch", "diff")):
+                path = artifact_dir / name
+                entry[key] = path.read_text(encoding="utf-8") if path.is_file() else None
+        return entry
+
+    def _state_payload(request_id: str | None = None, override: dict | None = None) -> dict:
+        if request_id:
+            req = override if override and override["id"] == request_id else requests.get(request_id)
+            rows = [_request_payload(req, include_artifacts=True)] if req else []
+        else:
+            rows = []
+            for req in requests.list_all():
+                if override and req["id"] == override["id"]:
+                    req = override
+                rows.append(_request_payload(req))
+        return {"requests": rows}
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
 
     @app.get("/health")
     async def health():
         return {"status": "ok", "app": "caliper", "version": "0.1.0"}
+
+    def _read_settings_form(form):
+        entries = {
+            role: {
+                "base_url": str(form.get(f"{role}_base_url", "")),
+                "model": str(form.get(f"{role}_model", "")),
+            }
+            for role in ROLE_ORDER
+        }
+        keys = {role: str(form.get(f"{role}_api_key", "")) for role in ROLE_ORDER}
+        clear = {role: form.get(f"{role}_clear_key") == "on" for role in ROLE_ORDER}
+        action = str(form.get("action", "save"))
+        return entries, keys, clear, action
+
+    @app.get("/settings/models", response_class=HTMLResponse)
+    async def settings_models_page(request: Request, saved: int = 0):
+        return templates.TemplateResponse(
+            request,
+            "settings_models.html",
+            _ui_ctx(models=settings.status(), values={}, saved=bool(saved), error=None, test_result=None),
+        )
+
+    @app.post("/settings/models")
+    async def settings_models_save(request: Request):
+        nonlocal workflow
+        form = await request.form()
+        entries, keys, clear, _ = _read_settings_form(form)
+        try:
+            settings.save(entries, keys, clear)
+        except ModelsConfigError as exc:
+            return templates.TemplateResponse(
+                request,
+                "settings_models.html",
+                _ui_ctx(models=settings.status(entries), values=entries, saved=False, error=str(exc), test_result=None),
+                status_code=422,
+            )
+        if not workflow_injected:
+            workflow = build_workflow()
+        return RedirectResponse("/settings/models?saved=1", status_code=303)
+
+    @app.post("/settings/models/test")
+    async def settings_models_test(request: Request):
+        form = await request.form()
+        entries, keys, _, action = _read_settings_form(form)
+        role = action.split(":", 1)[1] if action.startswith("test:") else ""
+        if role not in ROLE_ORDER:
+            return RedirectResponse("/settings/models", status_code=303)
+        entry = entries[role]
+        key = keys[role] or settings.api_key(role)
+        try:
+            reply = probe_model(role, entry["base_url"], entry["model"], key)
+            result = {"role": role, "ok": True, "message": f"Connected. Reply: {reply[:120]}"}
+        except Exception as exc:
+            result = {"role": role, "ok": False, "message": str(exc)}
+        return templates.TemplateResponse(
+            request,
+            "settings_models.html",
+            _ui_ctx(models=settings.status(entries), values=entries, saved=False, error=None, test_result=result),
+        )
 
     @app.get("/projects", response_class=HTMLResponse)
     async def project_list(request: Request):
@@ -84,16 +216,27 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
 
     @app.get("/requests/new", response_class=HTMLResponse)
     async def request_new_global(request: Request):
-        if not registry.list_projects():
+        projects = registry.list_projects()
+        if not projects:
             return templates.TemplateResponse(request, "request_first_project.html", _ui_ctx())
-        return templates.TemplateResponse(request, "request_new.html", _ui_ctx(error=None, values={}))
+        return templates.TemplateResponse(
+            request,
+            "request_new.html",
+            _ui_ctx(error=None, values={}, form_action="/requests/new", project=None),
+        )
 
     @app.post("/requests/new")
     async def request_new_global_submit(request: Request, project_id: str = Form(""), kind: str = Form("feature"), text: str = Form(""), extra: str = Form("")):
         try:
+            manifest = registry.get_project(project_id)
+            missing = registry.setup_missing(manifest)
+            if missing:
+                return templates.TemplateResponse(
+                    request, "request_blocked.html", _ui_ctx(project=manifest, missing=missing), status_code=409
+                )
             req = requests.create(project_id=project_id, kind=kind if kind in VALID_KINDS else "feature", text=text, extra=extra or None)
         except ValueError as exc:
-            context = _ui_ctx(error=str(exc), values={"kind": kind, "text": text, "extra": extra, "project_id": project_id})
+            context = _ui_ctx(error=str(exc), values={"kind": kind, "text": text, "extra": extra, "project_id": project_id}, form_action="/requests/new", project=None)
             return templates.TemplateResponse(request, "request_new.html", context, status_code=422)
         except ProjectError:
             return templates.TemplateResponse(request, "project_missing.html", _ui_ctx(project_id=project_id), status_code=404)
@@ -116,9 +259,9 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             failed = [rid for rid, v in verdicts.items() if v["status"] == "fail"]
             passed = [rid for rid, v in verdicts.items() if v["status"] == "pass"]
             artifacts.pop("review")
-        return templates.TemplateResponse(request, "request_detail.html", {
-            "req": req, "artifacts": artifacts, "failed": failed, "passed": passed, "verdicts": verdicts,
-        })
+        return templates.TemplateResponse(request, "request_detail.html", _ui_ctx(
+            req=req, artifacts=artifacts, failed=failed, passed=passed, verdicts=verdicts,
+        ))
 
     @app.post("/requests/{req_id}/run")
     async def request_run(request: Request, req_id: str):
@@ -152,32 +295,150 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             return templates.TemplateResponse(request, "request_run_error.html", _ui_ctx(req_id=req_id, reason=str(exc)), status_code=422)
         return RedirectResponse(f"/requests/{req_id}", status_code=303)
 
+    @app.get("/api/events")
+    async def state_events(request: Request):
+        request_id = request.query_params.get("request")
+        once = request.query_params.get("once") == "1"
+        subscriber = bus.subscribe()
+
+        async def stream():
+            try:
+                yield _sse("snapshot", _state_payload(request_id))
+                if once:
+                    return
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        event = await asyncio.to_thread(subscriber.get, True, 5.0)
+                    except queue.Empty:
+                        yield ": keep-alive\n\n"
+                        continue
+                    yield _sse("update", _state_payload(request_id, event.get("request")))
+            finally:
+                bus.unsubscribe(subscriber)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     @app.get("/projects/new", response_class=HTMLResponse)
     async def project_new(request: Request):
-        return templates.TemplateResponse(request, "project_new.html", _ui_ctx(presets=STACK_PRESETS, error=None, values={}))
+        return templates.TemplateResponse(request, "project_new.html", _ui_ctx(error=None, values={}))
 
     @app.post("/projects/new")
-    async def project_create(request: Request, name: str = Form(""), repo_mode: str = Form("create_new"), repo_url: str = Form(""), stack_preset: str = Form("python-fastapi")):
+    async def project_create(request: Request, name: str = Form(""), repo_url: str = Form("")):
         try:
-            manifest = registry.create_project(
-                name=name, repo_mode=repo_mode, repo_url=repo_url or None, stack_preset=stack_preset,
-            )
+            manifest = registry.create_project(name=name, repo_url=repo_url or None)
         except ProjectError as exc:
-            context = _ui_ctx(presets=STACK_PRESETS, error=str(exc), values={"name": name, "repo_url": repo_url, "repo_mode": repo_mode, "stack_preset": stack_preset})
+            context = _ui_ctx(error=str(exc), values={"name": name, "repo_url": repo_url})
             return templates.TemplateResponse(request, "project_new.html", context, status_code=422)
         return RedirectResponse(f"/projects/{manifest['id']}", status_code=303)
 
-    @app.get("/projects/{project_id}", response_class=HTMLResponse)
-    async def project_detail(request: Request, project_id: str):
+    def _render_project(request: Request, project_id: str, error: str | None = None, status_code: int = 200):
         try:
             manifest = registry.get_project(project_id)
         except ProjectError:
             return templates.TemplateResponse(request, "project_missing.html", _ui_ctx(project_id=project_id), status_code=404)
-        manifest["stack_label"] = STACK_PRESETS.get(manifest.get("stack_preset") or "", "")
-        return templates.TemplateResponse(request, "project_detail.html", _ui_ctx(
-            project=manifest,
-            requests=requests.list_for_project(project_id),
-        ))
+        setup = registry.setup_status(manifest)
+        project_requests = requests.list_for_project(project_id)
+        stop_ready = {
+            env: all(manifest["environments"][env].get(key) for key in (
+                "host", "user", "deploy_path", "compose_file",
+            )) and registry.environment_key_path(project_id, env).is_file()
+            for env in ("dev", "prod")
+        }
+        return templates.TemplateResponse(
+            request,
+            "project_detail.html",
+            _ui_ctx(
+                project=manifest,
+                requests=project_requests,
+                request_count=len(project_requests),
+                active_requests=[req for req in project_requests if req["status"] in ACTIVE_STATUSES],
+                setup=setup,
+                setup_missing=[item["label"] for item in setup if not item["ready"]],
+                setup_ready=all(item["ready"] for item in setup),
+                setup_error=error,
+                stop_ready=stop_ready,
+            ),
+            status_code=status_code,
+        )
+
+    @app.get("/projects/{project_id}", response_class=HTMLResponse)
+    async def project_detail(request: Request, project_id: str):
+        return _render_project(request, project_id)
+
+    @app.delete("/api/projects/{project_id}")
+    async def project_delete_api(project_id: str, stop_dev: bool = False, stop_prod: bool = False):
+        try:
+            return project_deleter.delete(project_id, stop_dev=stop_dev, stop_prod=stop_prod)
+        except ProjectDeleteError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/projects/{project_id}/repository/key")
+    async def repository_key_form(request: Request, project_id: str):
+        try:
+            registry.ensure_deploy_key(project_id)
+        except ProjectError as exc:
+            return _render_project(request, project_id, error=str(exc), status_code=422)
+        return RedirectResponse(f"/projects/{project_id}#repository", status_code=303)
+
+    @app.post("/projects/{project_id}/repository/test")
+    async def repository_test_form(request: Request, project_id: str):
+        try:
+            ok, message = registry.test_repository_access(project_id)
+        except ProjectError as exc:
+            return _render_project(request, project_id, error=str(exc), status_code=422)
+        if not ok:
+            return _render_project(request, project_id, error=message, status_code=422)
+        return RedirectResponse(f"/projects/{project_id}#repository", status_code=303)
+
+    @app.post("/projects/{project_id}/environments/{env}")
+    async def environment_save_form(
+        request: Request,
+        project_id: str,
+        env: str,
+        host: str = Form(""),
+        user: str = Form(""),
+        deploy_path: str = Form(""),
+        compose_file: str = Form("docker-compose.yml"),
+        health_url: str = Form(""),
+        action: str = Form("save"),
+    ):
+        try:
+            registry.save_environment(project_id, env, {
+                "host": host, "user": user, "deploy_path": deploy_path,
+                "compose_file": compose_file, "health_url": health_url,
+            })
+            if action == "test":
+                ok, message = registry.test_environment_access(project_id, env)
+                if not ok:
+                    return _render_project(request, project_id, error=message, status_code=422)
+        except ProjectError as exc:
+            return _render_project(request, project_id, error=str(exc), status_code=422)
+        return RedirectResponse(f"/projects/{project_id}#environment-{env}", status_code=303)
+
+    @app.post("/projects/{project_id}/principles/{key}")
+    async def principle_status_form(request: Request, project_id: str, key: str, action: str = Form("approve")):
+        try:
+            if action == "approve":
+                principles.approve(project_id, key)
+            else:
+                principles.unapprove(project_id, key)
+        except PrinciplesError as exc:
+            return _render_project(request, project_id, error=str(exc), status_code=422)
+        except ProjectError as exc:
+            return _render_project(request, project_id, error=str(exc), status_code=422)
+        return RedirectResponse(f"/projects/{project_id}#principles", status_code=303)
 
     @app.get("/projects/{project_id}/requests/new", response_class=HTMLResponse)
     async def request_new(request: Request, project_id: str):
@@ -185,17 +446,31 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             manifest = registry.get_project(project_id)
         except ProjectError:
             return templates.TemplateResponse(request, "project_missing.html", _ui_ctx(project_id=project_id), status_code=404)
-        return templates.TemplateResponse(request, "request_new.html", _ui_ctx(project=manifest, error=None, values={}))
+        missing = registry.setup_missing(manifest)
+        if missing:
+            return templates.TemplateResponse(
+                request, "request_blocked.html", _ui_ctx(project=manifest, missing=missing), status_code=409
+            )
+        return templates.TemplateResponse(
+            request,
+            "request_new.html",
+            _ui_ctx(project=manifest, form_action=f"/projects/{project_id}/requests/new", error=None, values={}),
+        )
 
     @app.post("/projects/{project_id}/requests/new")
     async def request_create(request: Request, project_id: str, kind: str = Form("feature"), text: str = Form(""), extra: str = Form("")):
         try:
             manifest = registry.get_project(project_id)
+            missing = registry.setup_missing(manifest)
+            if missing:
+                return templates.TemplateResponse(
+                    request, "request_blocked.html", _ui_ctx(project=manifest, missing=missing), status_code=409
+                )
             req = requests.create(project_id=project_id, kind=kind if kind in VALID_KINDS else "feature", text=text, extra=extra or None)
         except ProjectError:
             return templates.TemplateResponse(request, "project_missing.html", _ui_ctx(project_id=project_id), status_code=404)
         except ValueError as exc:
-            context = _ui_ctx(project=manifest, error=str(exc), values={"kind": kind, "text": text, "extra": extra})
+            context = _ui_ctx(project=manifest, form_action=f"/projects/{project_id}/requests/new", error=str(exc), values={"kind": kind, "text": text, "extra": extra})
             return templates.TemplateResponse(request, "request_new.html", context, status_code=422)
         return RedirectResponse(f"/requests/{req['id']}", status_code=303)
 

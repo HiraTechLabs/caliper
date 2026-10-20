@@ -1,19 +1,22 @@
 {% extends "base.html" %}
-{% from "_components.html" import status_pill, stepper %}
+{% from "_components.html" import status_pill, stepper, factory_floor, icon %}
 {% block title %}{{ req.project_id }}: {{ req.id }} - Caliper{% endblock %}
+{% block page_id %}request{% endblock %}
 {% block content %}
+<div data-request-root data-request-id="{{ req.id }}" data-status="{{ req.status }}">
 <div class="page-head">
-  <h1 class="page-title">{{ req.project_id }} · {{ req.id }}</h1>
-  {{ status_pill(req.status) }}
+  <h1 class="page-title">{{ req.project_id }} &middot; {{ req.id }}</h1>
+  {{ status_pill(req.status, req.id) }}
 </div>
 {{ stepper(req.status) }}
+{{ factory_floor(req.status) }}
 
 {% if req.status == 'failed' %}
-<div class="alert danger">Review failed {{ req.loop_count + 1 }} times. The workflow stopped and needs your call: edit the plan by hand or reject the request.</div>
+<div class="alert danger" data-failed-alert>Review failed {{ req.loop_count + 1 }} times. The workflow stopped and needs your call: edit the plan by hand or reject the request.</div>
+{% else %}
+<div class="alert danger" data-failed-alert hidden>Review failed. The workflow stopped and needs your call: edit the plan by hand or reject the request.</div>
 {% endif %}
-{% if req.review_note %}
-<div class="note">Human feedback: {{ req.review_note }}</div>
-{% endif %}
+<div class="note" data-review-note {% if not req.review_note %}hidden{% endif %}>Human feedback: <span data-review-note-text>{{ req.review_note or '' }}</span></div>
 
 <div class="card request-body">
   <p>{{ req.text }}</p>
@@ -25,44 +28,69 @@
   {% endif %}
 </div>
 
-{% if artifacts %}
-<section class="detail-section">
+{% set review_visible = verdicts or req.status == 'reviewing' %}
+<section class="detail-section" data-review-section {% if not review_visible %}hidden{% endif %}>
   <h2>Review</h2>
-  {% if failed %}
-  <p class="muted">{{ failed|length }} failed · {{ verdicts|length - failed|length }} passed</p>
-  {% else %}
-  <p class="muted">All {{ verdicts|length }} rules passed</p>
-  {% endif %}
-  <ul class="rule-list">
-    {% for rid in failed %}
-    <li class="card rule-row fail"><span class="mono rule-id">FAIL {{ rid }}</span><span>{{ verdicts[rid].reason }}</span></li>
-    {% endfor %}
-    {% if passed %}
-    <li><details><summary class="muted">{{ passed|length }} passed - show</summary>
-      <ul class="rule-list">
-        {% for rid in passed %}
-        <li class="card rule-row pass"><span class="mono rule-id">PASS {{ rid }}</span><span>{{ verdicts[rid].reason }}</span></li>
-        {% endfor %}
-      </ul>
-    </details></li>
+  <div data-review-content data-review-signature="{{ verdicts|tojson if verdicts else '' }}">
+    {% if verdicts %}
+    {% if failed %}
+    <p class="muted" data-review-summary>{{ failed|length }} failed &middot; {{ verdicts|length - failed|length }} passed</p>
+    {% else %}
+    <p class="muted" data-review-summary>All {{ verdicts|length }} rules passed</p>
     {% endif %}
-  </ul>
+    <ul class="rule-list" data-rule-list>
+      {% for rid in failed %}
+      <li class="card rule-row fail" data-rule-row data-rule-id="{{ rid }}" data-verdict="fail">
+        <span class="rule-state" data-rule-state><span class="rule-state-icon tone-failed">{{ icon('x') }}</span></span>
+        <span class="mono rule-id">FAIL {{ rid }}</span><span>{{ verdicts[rid].reason }}</span>
+      </li>
+      {% endfor %}
+      {% if passed %}
+      <li data-passed-item>
+        <details data-passed-group>
+          <summary class="muted">{{ passed|length }} passed - show</summary>
+          <ul class="rule-list">
+            {% for rid in passed %}
+            <li class="card rule-row pass" data-rule-row data-rule-id="{{ rid }}" data-verdict="pass">
+              <span class="rule-state" data-rule-state><span class="rule-state-icon tone-merged">{{ icon('check') }}</span></span>
+              <span class="mono rule-id">PASS {{ rid }}</span><span>{{ verdicts[rid].reason }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+        </details>
+      </li>
+      {% endif %}
+    </ul>
+    {% elif req.status == 'reviewing' %}
+    <div class="review-skeleton" data-review-skeleton aria-label="Review in progress">
+      <div class="skeleton skeleton-line"></div>
+      <div class="skeleton skeleton-line"></div>
+      <div class="skeleton skeleton-line"></div>
+    </div>
+    {% endif %}
+  </div>
 </section>
 
-<section class="detail-section">
+<section class="detail-section" data-plan-section {% if not artifacts.plan %}hidden{% endif %}>
   <h2>Plan</h2>
-  <details><summary class="muted">Show plan</summary><pre class="principle-content">{{ artifacts.plan }}</pre></details>
+  <details class="plan-details">
+    <summary class="muted">Show plan</summary>
+    <pre class="principle-content" data-plan-content>{{ artifacts.plan or '' }}</pre>
+  </details>
 </section>
 
-<section class="detail-section">
+<section class="detail-section" data-diff-section {% if not artifacts.diff %}hidden{% endif %}>
   <h2>Changes</h2>
-  <pre class="diff"><code>{{ artifacts.diff }}</code></pre>
+  <pre class="diff"><code data-diff-content>{{ artifacts.diff or '' }}</code></pre>
 </section>
-{% endif %}
 
-<div class="form-actions">
+<div class="form-actions" data-action-area>
   {% if req.status == 'submitted' %}
-  <form method="post" action="/requests/{{ req.id }}/run"><button class="btn primary" type="submit">Run workflow</button></form>
+    {% if not models_configured %}
+    <div class="alert" role="alert">Models are not configured: {{ models_missing|join(', ') }}. <a href="/settings/models">Open Settings &gt; Models</a>.</div>
+    {% else %}
+    <form method="post" action="/requests/{{ req.id }}/run"><button class="btn primary" type="submit">Run workflow</button></form>
+    {% endif %}
   {% elif req.status == 'awaiting_approval' %}
   <form method="post" action="/requests/{{ req.id }}/approve">
     <button class="btn primary" type="submit">Approve &amp; merge</button>
@@ -77,7 +105,7 @@
   <details class="confirm-dialog">
     <summary class="btn danger">Deploy to Prod</summary>
     <div class="card confirm-body">
-      <p>This runs <span class="mono">{{ 'prod' }}</span> deploy for request <span class="mono">{{ req.id }}</span>. This is the final production gate.</p>
+      <p>This runs <span class="mono">prod</span> deploy for request <span class="mono">{{ req.id }}</span>. This is the final production gate.</p>
       <form method="post" action="/requests/{{ req.id }}/prod">
         <button class="btn danger" type="submit">Yes, deploy to Prod</button>
         <a class="btn ghost" href="/requests/{{ req.id }}">Cancel</a>
@@ -89,5 +117,6 @@
   {% elif req.status == 'live' %}
   <span class="muted">Merged and deployed to Prod. Nothing left to do.</span>
   {% endif %}
+</div>
 </div>
 {% endblock %}

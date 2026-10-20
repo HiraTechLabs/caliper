@@ -4,12 +4,14 @@ from fastapi.testclient import TestClient
 from caliper.main import create_app
 from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
+from tests.support import complete_setup
 
 
 @pytest.fixture()
 def client(tmp_path):
     registry = ProjectRegistry(tmp_path / "projects")
-    registry.create_project(name="Shop API", repo_mode="create_new")
+    registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    complete_setup(registry, "shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
     return TestClient(create_app(registry=registry, requests=requests))
 

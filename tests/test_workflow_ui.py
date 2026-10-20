@@ -1,11 +1,11 @@
 import pytest
 from fastapi.testclient import TestClient
 from caliper.main import create_app
-from caliper.mock_models import MockReviewModel
+from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel
 from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
 from caliper.workflow import Workflow
-from tests.support import approve_principles
+from tests.support import complete_setup
 
 
 class FailingReview(MockReviewModel):
@@ -14,20 +14,28 @@ class FailingReview(MockReviewModel):
 
 def _make(tmp_path, review=None):
     registry = ProjectRegistry(tmp_path / "projects")
-    registry.create_project(name="Shop API", repo_mode="create_new")
-    approve_principles(registry, "shop-api")
+    registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    complete_setup(registry, "shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
-    workflow = Workflow(requests, registry, tmp_path / "projects", review=review)
+    workflow = Workflow(
+        requests, registry, tmp_path / "projects",
+        planning=MockPlanningModel(), execution=MockExecutionModel(),
+        review=review or MockReviewModel(),
+    )
     return TestClient(create_app(registry=registry, requests=requests, workflow=workflow))
 
 
 @pytest.fixture()
 def client(tmp_path):
     registry = ProjectRegistry(tmp_path / "projects")
-    registry.create_project(name="Shop API", repo_mode="create_new")
-    approve_principles(registry, "shop-api")
+    registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    complete_setup(registry, "shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
-    return TestClient(create_app(registry=registry, requests=requests))
+    workflow = Workflow(
+        requests, registry, tmp_path / "projects",
+        planning=MockPlanningModel(), execution=MockExecutionModel(), review=MockReviewModel(),
+    )
+    return TestClient(create_app(registry=registry, requests=requests, workflow=workflow))
 
 
 def test_run_button_appears_only_when_submitted_and_pipeline_renders(client):
