@@ -11,11 +11,6 @@ class WorkflowError(Exception):
     pass
 
 
-def all_rule_ids() -> list[str]:
-    from caliper.principles import PRINCIPLES
-    return [rid for rules in PRINCIPLES.values() for _, rid, _ in rules]
-
-
 class MockPlanningModel:
     def plan(self, req: dict, project: dict, rule_ids: list[str]) -> str:
         cited = ", ".join(rule_ids)

@@ -43,14 +43,16 @@ class Workflow:
         return dir
 
     def run(self, req_id: str) -> dict:
-        from caliper.principles import PRINCIPLES
-        rule_ids = [rid for meta in PRINCIPLES.values() for _, rid, _ in meta["rules"]]
-
         req = self.requests.get(req_id)
         if req is None:
             raise WorkflowError(f"Request '{req_id}' does not exist.")
         if req["status"] != "submitted":
             raise WorkflowError(f"Request {req_id} is '{req['status']}', expected 'submitted'.")
+        rule_ids = self.registry.approved_rule_ids(req["project_id"])
+        if not rule_ids:
+            raise WorkflowError(
+                "The project has no approved principle rules. Approve the principles first."
+            )
         project = self.registry.get_project(req["project_id"])
         dir = self.artifact_dir(req_id)
         dir.mkdir(parents=True, exist_ok=True)

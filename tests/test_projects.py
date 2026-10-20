@@ -1,8 +1,8 @@
 import pytest
 import yaml
 
-from caliper.principles import PRINCIPLES
-from caliper.registry import PRINCIPLE_ORDER, ProjectError, ProjectRegistry
+from caliper.principles import PRINCIPLE_ORDER, principle_starter, rule_ids
+from caliper.registry import ProjectError, ProjectRegistry
 
 
 @pytest.fixture()
@@ -10,7 +10,7 @@ def registry(tmp_path):
     return ProjectRegistry(tmp_path / "projects")
 
 
-def test_create_project_writes_manifest_and_six_principles(registry):
+def test_create_project_writes_the_manifest_and_no_local_principle_files(registry):
     manifest = registry.create_project(name="Shop API", repo_mode="create_new")
 
     assert manifest["id"] == "shop-api"
@@ -21,19 +21,21 @@ def test_create_project_writes_manifest_and_six_principles(registry):
 
     project_dir = registry.projects_root / "shop-api"
     assert (project_dir / "manifest.yaml").is_file()
+    # The principle files live in the repository, not on this disk (12.4).
+    assert not (project_dir / "principles").exists()
     for key in PRINCIPLE_ORDER:
-        principle_file = project_dir / "principles" / f"{key}.md"
-        assert principle_file.is_file()
-        content = principle_file.read_text(encoding="utf-8")
-        first_rule_id = PRINCIPLES[key]["rules"][0][1]
-        assert f"**{first_rule_id}**" in content
+        record = manifest["principles"][key]
+        assert record["state"] == "missing"
+        assert record["rule_ids"] == []
 
 
-def test_principle_files_contain_numbered_rule_ids(registry):
-    registry.create_project(name="Birds", repo_mode="create_new")
-    content = (registry.projects_root / "birds" / "principles" / "security.md").read_text(encoding="utf-8")
-    for rule_id in [r[1] for r in PRINCIPLES["security"]["rules"]]:
-        assert rule_id in content
+def test_a_new_principle_is_a_heading_and_one_instruction_line_without_rules():
+    for key in PRINCIPLE_ORDER:
+        content = principle_starter(key)
+        lines = [line for line in content.strip().splitlines() if line.strip()]
+        assert lines[0].startswith("# ")
+        assert len(lines) == 2
+        assert rule_ids(content) == []
 
 
 def test_product_field_is_accepted_and_stored(registry):

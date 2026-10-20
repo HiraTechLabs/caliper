@@ -47,7 +47,8 @@ def test_create_project_via_form_shows_in_list_and_detail(client):
     assert "Environments" in detail.text
     assert "Dev" in detail.text and "Prod" in detail.text
     assert "Security" in detail.text
-    assert "SEC-001" in detail.text
+    # No invented rules: the principle files live in the repository.
+    assert "SEC-001" not in detail.text
 
 
 def test_create_new_repo_shows_repo_pending(client):

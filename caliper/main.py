@@ -4,23 +4,27 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from caliper.registry import STACK_PRESETS, ProjectError, ProjectRegistry
+from caliper.principles import PrinciplesError, PrinciplesService
+from caliper.registry import ENVIRONMENT_ORDER, STACK_PRESETS, ProjectError, ProjectRegistry
 from caliper.state import VALID_KINDS, RequestStore
 
 BASE_DIR = Path(__file__).resolve().parent
 
 
-def create_app(registry: ProjectRegistry | None = None, requests: RequestStore | None = None, workflow=None) -> FastAPI:
+def create_app(registry: ProjectRegistry | None = None, requests: RequestStore | None = None,
+               workflow=None, principles: PrinciplesService | None = None) -> FastAPI:
     if registry is None:
         projects_root = os.environ.get("CALIPER_PROJECTS_ROOT", str(BASE_DIR.parent / "projects"))
         registry = ProjectRegistry(Path(projects_root))
     if requests is None:
         db_path = os.environ.get("CALIPER_DB_PATH", str(BASE_DIR.parent / ".caliper-state" / "state.sqlite3"))
         requests = RequestStore(db_path)
+    if principles is None:
+        principles = PrinciplesService(registry)
 
     from caliper.models_config import load_models_config, make_adapters
     from caliper.workflow import Workflow
@@ -194,6 +198,159 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             context = _ui_ctx(project=manifest, error=str(exc), values={"kind": kind, "text": text, "extra": extra})
             return templates.TemplateResponse(request, "request_new.html", context, status_code=422)
         return RedirectResponse(f"/requests/{req['id']}", status_code=303)
+
+    # --- Repository access (AGENTS.md 12.3) ----------------------------------------
+
+    @app.get("/api/projects/{project_id}/repository")
+    async def repository_status(project_id: str):
+        try:
+            return registry.repository_status(project_id)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/api/projects/{project_id}/repository/key")
+    async def repository_key(project_id: str):
+        try:
+            registry.ensure_deploy_key(project_id)
+            return registry.repository_status(project_id)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+
+    @app.post("/api/projects/{project_id}/repository/test")
+    async def repository_test(project_id: str):
+        try:
+            ok, message = registry.test_repository_access(project_id)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        if not ok:
+            return JSONResponse(
+                {"error": message, "repository": registry.repository_status(project_id)},
+                status_code=422,
+            )
+        return {"ok": True, "message": message, "repository": registry.repository_status(project_id)}
+
+    # --- Principles (AGENTS.md 12.4 / 12.8) ----------------------------------------
+
+    @app.get("/api/projects/{project_id}/principles")
+    async def principles_list(project_id: str):
+        try:
+            return principles.list_principles(project_id)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/api/projects/{project_id}/principles/sync")
+    async def principles_sync(project_id: str):
+        try:
+            return principles.sync(project_id)
+        except PrinciplesError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.get("/api/projects/{project_id}/principles/{key}")
+    async def principle_read(project_id: str, key: str):
+        try:
+            return principles.read_principle(project_id, key)
+        except PrinciplesError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.put("/api/projects/{project_id}/principles/{key}")
+    async def principle_write(request: Request, project_id: str, key: str):
+        content = None
+        body = await request.body()
+        if body:
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                return JSONResponse(
+                    {"error": "The request body must be JSON with a 'content' field."},
+                    status_code=400,
+                )
+            if not isinstance(data, dict):
+                return JSONResponse({"error": "The request body must be a JSON object."}, status_code=400)
+            content = data.get("content")
+            if content is not None and not isinstance(content, str):
+                return JSONResponse({"error": "'content' must be a string."}, status_code=400)
+        try:
+            return principles.put(project_id, key, content)
+        except PrinciplesError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/api/projects/{project_id}/principles/{key}/approve")
+    async def principle_approve(project_id: str, key: str):
+        try:
+            return principles.approve(project_id, key)
+        except PrinciplesError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/api/projects/{project_id}/principles/{key}/unapprove")
+    async def principle_unapprove(project_id: str, key: str):
+        try:
+            return principles.unapprove(project_id, key)
+        except PrinciplesError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    # --- Environments (AGENTS.md 12.5 / 12.8) ---------------------------------------
+
+    @app.get("/api/projects/{project_id}/environments")
+    async def environments_list(project_id: str):
+        try:
+            return {
+                "project_id": project_id,
+                "environments": [
+                    registry.environment_status(project_id, env) for env in ENVIRONMENT_ORDER
+                ],
+            }
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.put("/api/projects/{project_id}/environments/{env}")
+    async def environment_save(request: Request, project_id: str, env: str):
+        body = await request.body()
+        fields = {}
+        if body:
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                return JSONResponse(
+                    {"error": "The request body must be JSON with the environment fields."},
+                    status_code=400,
+                )
+            if not isinstance(data, dict):
+                return JSONResponse({"error": "The request body must be a JSON object."}, status_code=400)
+            fields = data
+        try:
+            registry.save_environment(project_id, env, fields)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        return registry.environment_status(project_id, env)
+
+    @app.post("/api/projects/{project_id}/environments/{env}/key")
+    async def environment_key(project_id: str, env: str):
+        try:
+            registry.ensure_environment_key(project_id, env)
+            return registry.environment_status(project_id, env)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+
+    @app.post("/api/projects/{project_id}/environments/{env}/test")
+    async def environment_test(project_id: str, env: str):
+        try:
+            ok, message = registry.test_environment_access(project_id, env)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        status = registry.environment_status(project_id, env)
+        if not ok:
+            return JSONResponse({"error": message, "environment": status}, status_code=422)
+        return {"ok": True, "message": message, "environment": status}
 
     return app
 

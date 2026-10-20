@@ -5,6 +5,7 @@ from caliper.mock_models import MockReviewModel
 from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
 from caliper.workflow import MAX_LOOPS, Workflow, WorkflowError, validate_review
+from tests.support import approve_principles
 
 
 class FailingReview(MockReviewModel):
@@ -15,6 +16,7 @@ class FailingReview(MockReviewModel):
 def env(tmp_path):
     registry = ProjectRegistry(tmp_path / "projects")
     registry.create_project(name="Shop API", repo_mode="create_new")
+    approve_principles(registry, "shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
     workflow = Workflow(requests, registry, tmp_path / "projects")
     return registry, requests, workflow

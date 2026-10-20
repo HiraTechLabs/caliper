@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from caliper.main import create_app
 from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
+from tests.support import approve_principles
 
 
 @pytest.fixture()
@@ -39,6 +40,7 @@ def test_global_composer_with_project_shows_selector(bare):
 def test_global_composer_submit_creates_and_redirects(bare):
     client, registry, _ = bare
     registry.create_project(name="Shop API", repo_mode="create_new")
+    approve_principles(registry, "shop-api")
     response = client.post(
         "/requests/new",
         data={"project_id": "shop-api", "kind": "bugfix", "text": "Login redirect broken", "extra": ""},
@@ -51,6 +53,7 @@ def test_global_composer_submit_creates_and_redirects(bare):
 def test_status_snapshot_reports_pipeline_state(bare):
     client, registry, tmp_path = bare
     registry.create_project(name="Shop API", repo_mode="create_new")
+    approve_principles(registry, "shop-api")
     requests = client  # unused marker for clarity
     client.post("/requests/new", data={"project_id": "shop-api", "kind": "feature", "text": "x", "extra": ""})
     snapshot = client.get("/status").json()
@@ -58,4 +61,4 @@ def test_status_snapshot_reports_pipeline_state(bare):
     client.post("/requests/req-1/run")
     snapshot = client.get("/status").json()
     assert snapshot["requests"][0]["status"] == "awaiting_approval"
-    assert snapshot["requests"][0]["total"] == 25
+    assert snapshot["requests"][0]["total"] == 12
