@@ -7,49 +7,111 @@ nodes:
     path: caliper/main.py
     kind: application
     description: >
-      FastAPI application factory and HTTP surface: GET /health,
-      project list / create / detail pages, and the run() entrypoint
-      (bind 127.0.0.1:8080 by default; env overrides CALIPER_HOST/CALIPER_PORT).
-  - id: project-registry
-    path: caliper/registry.py
+      FastAPI HTTP surface and composition root: dashboard, project list/create/detail,
+      request composer, request page (plan/diff/review/actions), /status polling JSON,
+      /health, and the run() entrypoint (bind 127.0.0.1:8080 by default).
+  - id: workflow-engine
+    path: caliper/workflow.py
     kind: domain
     description: >
-      ProjectRegistry: creates/lists/loads projects under
-      CALIPER_PROJECTS_ROOT (default <repo>/projects), writing manifest.yaml
-      (incl. optional product field and dev/prod environment definitions)
-      and the six principles/<key>.md files. ProjectError for validation.
+      Synchronous pipeline submitted -> planning -> executing -> reviewing ->
+      awaiting_approval (or requested-changes loop, max 3, then failed) ->
+      approve&merge -> deploy_dev -> approve_prod -> live. Owns artifact paths and
+      review validation (per-rule verdicts mandatory).
+  - id: model-adapters
+    path: caliper/mock_models.py
+    kind: domain
+    description: >
+      Mock role models (planning/execution/review) used by default: deterministic
+      outputs citing rule IDs; deterministic optional failure for loop testing.
+  - id: http-model-adapters
+    path: caliper/http_models.py
+    kind: domain
+    description: >
+      OpenAI-compatible HTTP role adapters (chat/completions) with test-injectable
+      transport: planner must cite rule IDs, executor returns fenced diff,
+      reviewer must return per-rule JSON verdicts. Disabled by default.
+  - id: models-config
+    path: caliper/models_config.py
+    kind: domain
+    description: >
+      Loads/validates models.yaml (three roles, adapter mock|http, base_url when
+      http) and enforces three DISTINCT model ids at startup; factory builds
+      role adapters (mock or http).
+  - id: deploy-adapter
+    path: caliper/workflow.py
+    kind: domain
+    description: >
+      Deploy adapter interface; MockDeployAdapter records dev/prod deploys.
+      Real SSH/docker adapter deferred until a real environment is reachable.
   - id: principles-templates
     path: caliper/principles.py
     kind: domain
     description: >
-      Principle definitions (title + numbered checkable rule IDs such as
-      SEC-001) and the per-file renderer used when a project is created.
+      Six principle definitions with numbered checkable rule IDs (SEC/ARC/PRF/CLC/
+      BUS/TEC) and the per-file renderer used when a project is created.
+  - id: project-registry
+    path: caliper/registry.py
+    kind: domain
+    description: >
+      ProjectRegistry: validation + id slab + persistence of manifest.yaml
+      (repo mode/url, optional product field, dev/prod environment definitions)
+      and the six principles files.
+  - id: request-store
+    path: caliper/state.py
+    kind: data-store
+    description: >
+      SQLite run state (CALIPER_DB_PATH default .caliper-state/state.sqlite3):
+      request id/kind/text/extra/status/loop_count/review_note. Safely deletable.
   - id: app-ui
     path: caliper/templates
     kind: presentation
     description: >
-      Jinja2 templates rendered server-side by app-core
-      (base layout + sidebar, project list, add-project form, project
-      detail, not-found page) with static/style.css implementing
-      UI_SYSTEM tokens. Plain form POST; HTMX not introduced yet.
+      Jinja2 server-rendered screens per draft UI_SYSTEM: dashboard
+      (needs-you/in-progress/recent), projects list, add form, project page,
+      request page (stepper, review rows failed-first, plan, diff, approve gates),
+      composer, empty/missing/error states. Vanilla-JS poller updates pills from /status.
   - id: project-store
     path: projects/
     kind: data-store
     description: >
-      Runtime-only project data written by project-registry
-      (one directory per project). Not part of the Caliper git repo;
-      location overridable via CALIPER_PROJECTS_ROOT.
+      Runtime-only project data written by project-registry and workflow-engine:
+      one directory per project (manifest, principles, req-<n>/ artifacts).
+      Not committed; location overridable via CALIPER_PROJECTS_ROOT.
   - id: tests
     path: tests/
     kind: test-suite
     description: >
-      pytest suite: smoke test on app-core, registry behavior tests,
-      and UI flow tests over create/list/detail through TestClient.
+      pytest suite covering: scaffold smoke, registry, request state store, request
+      UI flows, workflow engine (success path, review loop exhaustion, validation),
+      workflow UI (run/approve gates), models.yaml validation, HTTP adapters with
+      fake transport, dashboard/global composer/status snapshot.
 
 edges:
   - from: app-core
-    to: project-registry
+    to: workflow-engine
     relation: uses
+  - from: workflow-engine
+    to: model-adapters
+    relation: role-calls
+  - from: workflow-engine
+    to: http-model-adapters
+    relation: role-calls-when-configured
+  - from: models-config
+    to: model-adapters
+    relation: builds
+  - from: models-config
+    to: http-model-adapters
+    relation: builds-when-configured
+  - from: workflow-engine
+    to: deploy-adapter
+    relation: deploys-through
+  - from: workflow-engine
+    to: principles-templates
+    relation: reads-rule-ids
+  - from: workflow-engine
+    to: project-store
+    relation: writes-artifacts
   - from: project-registry
     to: principles-templates
     relation: renders-and-writes
@@ -59,9 +121,27 @@ edges:
   - from: app-ui
     to: project-registry
     relation: displays-data-from
+  - from: app-ui
+    to: request-store
+    relation: displays-data-from
+  - from: app-core
+    to: models-config
+    relation: loads-at-startup
   - from: tests
     to: app-core
     relation: tests
   - from: tests
     to: project-registry
     relation: tests
+  - from: tests
+    to: request-store
+    relation: tests
+  - from: tests
+    to: workflow-engine
+    relation: tests
+  - from: tests
+    to: models-config
+    relation: tests
+  - from: tests
+    to: http-model-adapters
+    relation: tests-with-fake-transport

@@ -18,10 +18,14 @@ def test_health_endpoint_returns_ok(client):
 
 
 def test_project_list_empty_state(client):
-    response = client.get("/")
+    response = client.get("/projects")
     assert response.status_code == 200
     assert "No projects yet" in response.text
     assert "New project" in response.text
+
+    dashboard = client.get("/")
+    assert "All clear" in dashboard.text
+    assert "New request" in dashboard.text
 
 
 def test_create_project_via_form_shows_in_list_and_detail(client):
@@ -36,7 +40,7 @@ def test_create_project_via_form_shows_in_list_and_detail(client):
     assert "Product:" not in response.text
 
 
-    listing = client.get("/")
+    listing = client.get("/projects")
     assert "Shop API" in listing.text
 
     detail = client.get("/projects/shop-api")

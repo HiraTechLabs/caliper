@@ -1,8 +1,35 @@
 {% extends "base.html" %}
-{% from "_components.html" import composer %}
-{% block title %}New request - {{ project.name }} - Caliper{% endblock %}
+{% block title %}New request - Caliper{% endblock %}
 {% block content %}
-<h1 class="page-title">Project Request: {{ project.name }}</h1>
-<p class="muted">One box. Caliper derives the plan, the change, and the review.</p>
-{{ composer(project, "/projects/%s/requests/new" % project.id, error=error, values=values) }}
+<h1 class="page-title">New request</h1>
+<p class="muted">Pick the project, say what you want. Caliper derives everything else.</p>
+{% if error %}
+<div class="alert danger" role="alert">{{ error }}</div>
+{% endif %}
+<form class="form card" method="post" action="/requests/new">
+  <div class="field">
+    <label for="project_id">Project</label>
+    <select id="project_id" name="project_id">
+      {% for project in projects %}
+      <option value="{{ project.id }}" {% if project.id == values.get('project_id') %}selected{% endif %}>{{ project.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="segmented">
+    <label><input type="radio" name="kind" value="feature" {% if not values.get('kind') == 'bugfix' %}checked{% endif %}> Feature</label>
+    <label><input type="radio" name="kind" value="bugfix" {% if values.get('kind') == 'bugfix' %}checked{% endif %}> Bug</label>
+  </div>
+  <div class="field">
+    <label for="text">What do you want?</label>
+    <textarea id="text" name="text" rows="5" autofocus>{{ values.get('text', '') }}</textarea>
+  </div>
+  <details class="field attach">
+    <summary>+ Add error / log (optional)</summary>
+    <textarea name="extra" rows="4" placeholder="Paste the error or log here">{{ values.get('extra', '') }}</textarea>
+  </details>
+  <div class="form-actions">
+    <a class="btn ghost" href="/">Cancel</a>
+    <button class="btn primary" type="submit">Submit</button>
+  </div>
+</form>
 {% endblock %}

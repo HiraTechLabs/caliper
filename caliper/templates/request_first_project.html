@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Caliper{% endblock %}
+{% block content %}
+<div class="empty-state card">
+  <div class="empty-icon">&#128230;</div>
+  <p>Caliper cannot take a request until it has a project to work on.</p>
+  <p class="muted">Create a project first — it takes under a minute.</p>
+  <a class="btn primary" href="/projects/new">New project</a>
+</div>
+{% endblock %}

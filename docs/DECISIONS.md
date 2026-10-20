@@ -18,6 +18,13 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-009 | 2026-10-20 | One stack preset (`python-fastapi`) for now | (this) |
 | D-010 | 2026-10-20 | Projects root configurable via `CALIPER_PROJECTS_ROOT` | (this) |
 | D-011 | 2026-10-20 | Step-3 UI built from draft UI_SYSTEM.md | (this) |
+| D-012 | 2026-10-20 | Requests are run state in SQLite (deletable), artifacts in project dirs | (this) |
+| D-013 | 2026-10-20 | Workflow = synchronous pipeline behind three-role adapter interface | (this) |
+| D-014 | 2026-10-20 | Review loop: fail -> executing, max 3 loops, then `failed` for the human | (this) |
+| D-015 | 2026-10-20 | Startup fails fast on invalid/indistinct models.yaml | (this) |
+| D-016 | 2026-10-20 | Real adapters = OpenAI-compatible HTTP, disabled by default (mock) | (this) |
+| D-017 | 2026-10-20 | Deploy via adapter; mock records, SSH/docker adapter deferred | (this) |
+| D-018 | 2026-10-20 | Dashboard home + live polling via tiny JS on `/status`, no HTMX yet | (this) |
 
 ## Entries
 
@@ -121,3 +128,75 @@ Format: id, date, decision, reason, alternatives rejected.
   DRAFT pending final sign-off — no page content depends on parts not in the draft.
 - **Alternatives rejected:** API-only step 3 (invisible to the human); HTMX partials now
   (no state to update live yet); new components (requires a Decision entry first).
+
+### D-012 — Requests are run state in SQLite; artifacts live in project dirs
+- **Decision:** `requests` table in SQLite (`CALIPER_DB_PATH`, default `.caliper-state/state.sqlite3`,
+  gitignored) stores id/kind/text/extra/status/loop_count/review_note. Run artifacts
+  (`plan.md`, `diff.patch`, `review.json`, merge/deploy markers) are written to
+  `projects/<id>/req-<n>/`, next to the project's manifest and principles.
+- **Reason:** AGENTS.md 7b: "Git is the source of truth; SQLite holds run state only and must
+  be safely deletable." Plans/diffs/reviews are the work product (belongs with the project,
+  inspectable on disk); volatile pipeline state (status, note) belongs in the DB.
+- **Alternatives rejected:** everything in SQLite (artifacts invisible in the repo);
+  everything in files (status updates would be racy file edits).
+
+### D-013 — Workflow is a synchronous three-role pipeline behind an adapter interface
+- **Decision:** `Workflow.run()` drives submitted -> planning -> executing -> reviewing ->
+  awaiting_approval synchronously; roles speak one interface (`plan`, `execute`, `review`)
+  and never see each other's reasoning (review reads plan + diff + principles only).
+- **Reason:** AGENTS.md section 1 and 7b role isolation; mocks first (work order step 5);
+  synchronous is sufficient for milestone M1 (mock adapters finish instantly) and avoids
+  background-job complexity before it earns its keep.
+- **Alternatives rejected:** a queue/worker setup (no need at this scale, adds failure modes);
+  roles reading each other's chain-of-thought (forbidden).
+
+### D-014 — Failed review loops back, max 3, then stops for the human
+- **Decision:** If review reports failed rules: back to executing (loop_count += 1). After
+  3 loops, status becomes `failed` and the engine stops; UI shows the failed rules first
+  plus guidance. A human note (`Request changes`) also returns the request to executing.
+- **Reason:** Exact lifecycle from AGENTS.md 7b: "(fail: back to executing, max 3 loops, then
+  stop and ask human)".
+- **Alternatives rejected:** auto-run forever; silently dropping the request.
+
+### D-015 — Startup fails fast on invalid or indistinct models.yaml
+- **Decision:** `create_app()` loads `CALIPER_MODELS_CONFIG` (default `caliper/models.yaml`)
+  and `load_models_config` raises unless: exactly the roles planning/execution/review exist,
+  each has model+adapter (`mock` or `http`), `http` roles have base_url, and all three model
+  ids are distinct. Any violation aborts app creation.
+- **Reason:** AGENTS.md section 3: "startup validation fails if any two roles resolve to the
+  same model." Failing at import makes a misconfiguration impossible to miss.
+- **Alternatives rejected:** warning only (silent blunder risk); runtime validation (too late).
+
+### D-016 — Real adapters are OpenAI-compatible HTTP; mock remains the default
+- **Decision:** `caliper/http_models.py` implements the three roles over
+  `{base_url}/chat/completions` (httpx). Planner must cite rule IDs (validated), executor
+  returns a fenced diff (fence extracted), reviewer must return JSON verdicts
+  {rule_id: {status, reason}} (validated per rule; invalid review -> WorkflowError).
+  `models.yaml` ships with `adapter: mock` for all roles; switching to `http` is a config
+  edit. Not yet exercised against a live model backend.
+- **Reason:** Pluggable backend per AGENTS.md 3, one adapter interface, roles read files and
+  produce one file each; review with no rule IDs is invalid (section 4).
+- **Alternatives rejected:** SDK-specific adapters (vendor lock); auto-enabling real models
+  (AI roles disabled by default).
+
+### D-017 — Deploy is an adapter too; mock records deploys
+- **Decision:** `Workflow` takes a deploy adapter (default `MockDeployAdapter`, writes
+  deploy-dev/prod logs). Approve&merge writes `merged.marker`, auto-deploys Dev
+  (`deployed_dev`); a second explicit human gate with a confirm dialog deploys Prod (`live`).
+  The real SSH `docker compose` adapter is not implemented yet.
+- **Reason:** Human approval mandatory for merge AND Prod (AGENTS.md 3/7b). The SSH/Docker
+  runtime (Dev machine, AWS EC2) does not exist in this environment, so the adapter is
+  deferred rather than faked; the interface is already shaped for it.
+- **Alternatives rejected:** merging to real git branches now (no git layer yet; mock
+  execution writes no real code); skipping the Prod gate.
+
+### D-018 — Dashboard home + live polling without HTMX
+- **Decision:** `/` is a dashboard (NEEDS YOU / IN PROGRESS / RECENT, "All clear" when empty).
+  Live updates: a ~30-line vanilla-JS poller hits `/status` (JSON snapshot of statuses +
+  pass/fail dot counts) every 3s and updates status pills; list page moved to `/projects`.
+  HTMX is not introduced yet; no external CDNs (works offline).
+- **Reason:** AGENTS.md 7: request states always visible and color-coded, live progress
+  without page reload. Pending pills differ only when review progress exists (running
+  request shows piling dots) — minimal, no dependency added.
+- **Alternatives rejected:** HTMX partial wiring now (single dependency for one endpoint;
+  can be added when partial updates pluralize); websockets (overkill for 3s polling).

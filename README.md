@@ -70,7 +70,8 @@ CI has exactly three jobs (to be wired as they become relevant):
 
 ## Status
 
-Step 3 (project registry) done: create/list/view a project from the UI; each project gets a
-`manifest.yaml` (repo, optional `product:`, dev/prod environments) and 6 principles files
-with numbered checkable rule IDs. Nothing else exists yet — no request intake, no models, no
-workflow. See `AGENTS.md` for the work order.
+Step 9 done (end-to-end mock workflow): projects, request intake, planning/execution/review
+pipeline with mock adapters (real OpenAI-compatible adapters wired but disabled by default),
+review loop with 3-attempt limit, human approval gate -> merge -> Dev -> second gate -> Prod,
+dashboard with live status polling. Real SSH/docker deploy and git branch/merge are the next
+milestone items (see docs/DECISIONS.md, D-016/D-017).

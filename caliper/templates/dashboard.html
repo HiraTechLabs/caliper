@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% from "_components.html" import status_pill %}
+{% block title %}Caliper{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Dashboard</h1>
+  <a class="btn primary head-action" href="/requests/new">+ New request</a>
+</div>
+
+<section class="detail-section">
+  <h2>NEEDS YOU{% if counters %} ({{ needs|length }}){% endif %}</h2>
+  {% if needs %}
+  <ul class="request-list">
+    {% for req in needs %}
+    <li class="card request-card" data-req-badge="pill" data-req-id="{{ req.id }}">
+      <a class="request-link" href="/requests/{{ req.id }}">
+        {{ status_pill(req.status) }}
+        <span class="request-text">{{ req.text[:90] }}</span>
+        <span class="mono muted">{{ req.project_id }} · {{ req.id }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">All clear. Nothing is waiting for your approval.</p>
+  {% endif %}
+</section>
+
+<section class="detail-section">
+  <h2>IN PROGRESS{% if counters %} ({{ running|length }}){% endif %}</h2>
+  {% if running %}
+  <ul class="request-list">
+    {% for req in running %}
+    <li class="card request-card">
+      <a class="request-link" href="/requests/{{ req.id }}" data-poll>
+        {{ status_pill(req.status) }}
+        <span class="request-text">{{ req.text[:90] }}</span>
+        <span class="mono muted">{{ req.project_id }} · {{ req.id }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No request is being processed right now.</p>
+  {% endif %}
+</section>
+
+<section class="detail-section">
+  <h2>RECENT</h2>
+  {% if recent %}
+  <ul class="request-list">
+    {% for req in recent %}
+    <li class="card request-card">
+      <a class="request-link" href="/requests/{{ req.id }}">
+        {{ status_pill(req.status) }}
+        <span class="request-text">{{ req.text[:90] }}</span>
+        <span class="mono muted">{{ req.created_at }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No requests yet. Create a project and tell Caliper what you want.</p>
+  <a class="btn primary" href="/projects/new">New project</a>
+  {% endif %}
+</section>
+{% endblock %}

@@ -14,7 +14,7 @@
         <button class="theme-toggle" type="button" aria-label="Toggle dark mode">&#9681;</button>
       </div>
       <nav class="sidebar-projects">
-        <span class="sidebar-label">PROJECTS</span>
+        <a class="sidebar-project" href="/projects"><span class="sidebar-label">ALL PROJECTS</span></a>
         {% for project in projects %}
           <a class="sidebar-project" href="/projects/{{ project.id }}">{{ project.name }}</a>
         {% endfor %}
@@ -29,6 +29,31 @@
     document.querySelector(".theme-toggle").addEventListener("click", function () {
       document.documentElement.classList.toggle("dark");
     });
+    (function poll() {
+      fetch("/status").then(function (r) { return r.json(); }).then(function (data) {
+        var byId = {};
+        data.requests.forEach(function (d) { byId[d.id] = d; });
+        document.querySelectorAll("[data-req-badge='pill']").forEach(function (el) {
+          var d = byId[el.getAttribute("data-req-id")];
+          if (!d) return;
+          var pill = el.querySelector(".pill");
+          if (!pill) return;
+          var map = {
+            submitted: "status-neutral", planning: "status-planning", executing: "status-executing",
+            reviewing: "status-reviewing", awaiting_approval: "status-awaiting", merged: "status-merged",
+            deployed_dev: "status-merged", live: "status-merged", failed: "status-failed"
+          };
+          var labels = { planning: "Planning", executing: "Executing", reviewing: "Reviewing",
+            awaiting_approval: "Awaiting approval", merged: "Merged", deployed_dev: "Merged", live: "Live", failed: "Failed", submitted: "submitted" };
+          pill.className = "pill " + (map[d.status] || "status-neutral");
+          pill.querySelector("span.label").textContent = labels[d.status] || d.status;
+          var extra = el.getAttribute("data-review-progress");
+          if (extra && d.total > 0) {
+            el.querySelector(".review-dots").innerHTML = "&#9679;".repeat(d.fail) + "&#9675;".repeat(Math.max(0, d.total - d.fail));
+          }
+        });
+      }).catch(function () {}).finally(function () { setTimeout(poll, 3000); });
+    })();
   </script>
 </body>
 </html>

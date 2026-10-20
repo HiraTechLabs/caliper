@@ -40,7 +40,7 @@
     'failed': ['Failed', 'pill status-failed']
   } %}
   {% set pill = labels.get(status, [status, 'pill status-neutral']) %}
-  <span class="{{ pill[1] }}"><span class="dot"></span>{{ pill[0] }}</span>
+  <span class="{{ pill[1] }}"><span class="dot"></span><span class="label">{{ pill[0] }}</span></span>
 {% endmacro %}
 
 {% macro stepper(status) %}
