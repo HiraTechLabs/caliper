@@ -140,13 +140,18 @@ def ssh_copy_id_command(key_path: Path, user: str, host: str) -> str:
 def _fingerprint_of(key_line: str) -> str:
     """OpenSSH-style SHA256 fingerprint of a public key line."""
     parts = key_line.split()
-    if len(parts) < 2:
+    blob = None
+    for index, part in enumerate(parts):
+        if part in HOST_KEY_TYPES and index + 1 < len(parts):
+            blob = parts[index + 1]
+            break
+    if blob is None:
         raise RemoteError("The host key could not be read.")
     try:
-        blob = base64.b64decode(parts[1], validate=True)
+        raw = base64.b64decode(blob, validate=True)
     except Exception:
         raise RemoteError("The host key could not be read.")
-    digest = hashlib.sha256(blob).digest()
+    digest = hashlib.sha256(raw).digest()
     return "SHA256:" + base64.b64encode(digest).decode("ascii").rstrip("=")
 
 
@@ -156,20 +161,21 @@ def scan_host_key(host: str, port: int = 22) -> tuple[str, str]:
     if not keyscan:
         raise RemoteError("ssh-keyscan is not installed; the host key cannot be pinned.")
     if not host or any(ch.isspace() for ch in host):
-        raise RemoteError("Host is required and may not contain spaces.")
+        raise RemoteError("Host and user are required and may not contain spaces.")
     command = [keyscan, "-T", "10", "-t", ",".join(HOST_KEY_TYPES)]
     if port and int(port) != 22:
         command += ["-p", str(port)]
     command.append(host)
     code, output = _run(command)
-    lines = [
-        line.strip() for line in output.splitlines()
-        if line.strip() and line.split()[0] in HOST_KEY_TYPES
-    ]
+    lines = []
+    for line in output.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 3 and parts[1] in HOST_KEY_TYPES:
+            lines.append(line.strip())
     if not lines:
         raise RemoteError(f"Cannot read the host key of {host}: {output or 'ssh-keyscan failed'}")
     for line in lines:
-        if line.split()[0] == "ssh-ed25519":
+        if line.split()[1] == "ssh-ed25519":
             return _fingerprint_of(line), line
     return _fingerprint_of(lines[0]), lines[0]
 

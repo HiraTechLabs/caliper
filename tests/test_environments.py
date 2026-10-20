@@ -212,7 +212,7 @@ def test_permission_denied_is_reported_with_the_ssh_copy_id_command(tmp_path, mo
         check_environment("dev.example.com", "deploy", key_path, deploy_path="/srv/app",
                          known_hosts_path=tmp_path / "known_hosts")
     message = str(error.value)
-    assert "Permission denied" in message
+    assert "not authorized" in message
     assert f"ssh-copy-id -i {key_path} deploy@dev.example.com" in message
 
 
@@ -250,5 +250,5 @@ def test_a_failed_test_is_reported_by_the_api(registry, tmp_path, monkeypatch):
 
     response = client.post("/api/projects/shop-api/environments/dev/test")
     assert response.status_code == 422
-    assert "Connection refused" in response.json()["error"]
+    assert "nothing is listening for SSH" in response.json()["error"]
     assert registry.manifest("shop-api")["environments"]["dev"]["verified"] is False

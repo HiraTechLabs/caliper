@@ -9,15 +9,17 @@ nodes:
     description: >
       FastAPI HTTP surface and composition root: dashboard, project list/create/detail,
       request composer, request page (plan/diff/review/actions), /status polling JSON,
-      /health, and the run() entrypoint (bind 127.0.0.1:8080 by default).
+      /health, the run() entrypoint (bind 127.0.0.1:8080 by default) and the JSON API
+      under /api for repository access, principles and environments.
   - id: workflow-engine
     path: caliper/workflow.py
     kind: domain
     description: >
       Synchronous pipeline submitted -> planning -> executing -> reviewing ->
       awaiting_approval (or requested-changes loop, max 3, then failed) ->
-      approve&merge -> deploy_dev -> approve_prod -> live. Owns artifact paths and
-      review validation (per-rule verdicts mandatory).
+      approve&merge -> deploy_dev -> approve_prod -> live. Owns artifact paths,
+      review validation (per-rule verdicts mandatory) and takes the rule IDs of
+      the project from its APPROVED principles.
   - id: model-adapters
     path: caliper/mock_models.py
     kind: domain
@@ -44,19 +46,42 @@ nodes:
     description: >
       Deploy adapter interface; MockDeployAdapter records dev/prod deploys.
       Real SSH/docker adapter deferred until a real environment is reachable.
-  - id: principles-templates
+  - id: principles
     path: caliper/principles.py
     kind: domain
     description: >
-      Six principle definitions with numbered checkable rule IDs (SEC/ARC/PRF/CLC/
-      BUS/TEC) and the per-file renderer used when a project is created.
+      Principle rule format (IDs of the form XXX-NNN), the three states
+      (missing/draft/approved), the starter document (a heading and one
+      instruction line, never invented rules) and PrinciplesService, which reads
+      and writes .caliper/principles/*.md in the project repository and records
+      the approval as a content hash plus a commit.
+  - id: git-repo-access
+    path: caliper/repo.py
+    kind: infrastructure
+    description: >
+      Git access for one project repository through the git CLI and the project
+      deploy key: clone, default branch detection, fetch/reset of that branch,
+      reading a file, and writing + committing + pushing a file to the default
+      branch.
+  - id: remote-access
+    path: caliper/remote.py
+    kind: infrastructure
+    description: >
+      SSH and key helpers: ed25519 key generation under CALIPER_SECRETS_DIR
+      (mode 600), repository read/write probe (ls-remote plus push --dry-run),
+      host key scanning and SHA256 fingerprinting, host key pinning in a
+      per-environment known_hosts file, and the environment probe (ssh true,
+      docker compose version, deploy path exists and writable) that maps every
+      failure to a plain reason with the exact fix command.
   - id: project-registry
     path: caliper/registry.py
     kind: domain
     description: >
-      ProjectRegistry: validation + id slab + persistence of manifest.yaml
-      (repo mode/url, optional product field, dev/prod environment definitions)
-      and the six principles files.
+      ProjectRegistry: validation + id slug + persistence of manifest.yaml
+      (repo mode/url and its verification, optional product field, the state of
+      the six principles, dev/prod environment definitions and host key
+      fingerprint), the per-project deploy key, the per-environment SSH keys and
+      known_hosts files, and the repository/environment connection tests.
   - id: request-store
     path: caliper/state.py
     kind: data-store
@@ -76,8 +101,9 @@ nodes:
     kind: data-store
     description: >
       Runtime-only project data written by project-registry and workflow-engine:
-      one directory per project (manifest, principles, req-<n>/ artifacts).
-      Not committed; location overridable via CALIPER_PROJECTS_ROOT.
+      one directory per project (manifest, local clone of the repository,
+      req-<n>/ artifacts). Not committed; location overridable via
+      CALIPER_PROJECTS_ROOT.
   - id: tests
     path: tests/
     kind: test-suite
@@ -85,12 +111,18 @@ nodes:
       pytest suite covering: scaffold smoke, registry, request state store, request
       UI flows, workflow engine (success path, review loop exhaustion, validation),
       workflow UI (run/approve gates), models.yaml validation, HTTP adapters with
-      fake transport, dashboard/global composer/status snapshot.
+      fake transport, dashboard/global composer/status snapshot, repository access
+      (deploy key, read/write probe) and the principles/environments API (states,
+      approval rules, Git round trip against a local repository, SSH key and
+      ssh-copy-id command, host key pinning and a changed host key).
 
 edges:
   - from: app-core
     to: workflow-engine
     relation: uses
+  - from: app-core
+    to: principles
+    relation: exposes-principles-and-environment-api
   - from: workflow-engine
     to: model-adapters
     relation: role-calls
@@ -107,14 +139,23 @@ edges:
     to: deploy-adapter
     relation: deploys-through
   - from: workflow-engine
-    to: principles-templates
-    relation: reads-rule-ids
+    to: principles
+    relation: reads-approved-rule-ids
   - from: workflow-engine
     to: project-store
     relation: writes-artifacts
+  - from: principles
+    to: git-repo-access
+    relation: reads-and-writes-principles-in
+  - from: git-repo-access
+    to: remote-access
+    relation: uses-deploy-key-of
   - from: project-registry
-    to: principles-templates
-    relation: renders-and-writes
+    to: principles
+    relation: stores-approval-records
+  - from: project-registry
+    to: remote-access
+    relation: uses-for-keys-and-connection-tests
   - from: project-registry
     to: project-store
     relation: writes
@@ -145,3 +186,12 @@ edges:
   - from: tests
     to: http-model-adapters
     relation: tests-with-fake-transport
+  - from: tests
+    to: principles
+    relation: tests
+  - from: tests
+    to: git-repo-access
+    relation: tests-against-a-local-repository
+  - from: tests
+    to: remote-access
+    relation: tests-with-a-fake-ssh-runner

@@ -27,7 +27,10 @@ def make_git_repo(path: Path, branch: str = "main") -> str:
         check=True, capture_output=True,
     )
     subprocess.run(
-        ["git", "-C", str(work), "push", "-q", str(path), branch], check=True, capture_output=True
+        ["git", "-C", str(work), "remote", "add", "origin", str(path)], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(work), "push", "-q", "origin", branch], check=True, capture_output=True
     )
     return path.as_uri()
 

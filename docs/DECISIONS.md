@@ -25,6 +25,8 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-016 | 2026-10-20 | Real adapters = OpenAI-compatible HTTP, disabled by default (mock) | (this) |
 | D-017 | 2026-10-20 | Deploy via adapter; mock records, SSH/docker adapter deferred | (this) |
 | D-018 | 2026-10-20 | Dashboard home + live polling via tiny JS on `/status`, no HTMX yet | (this) |
+| D-019 | 2026-10-20 | Principles live in the project repository; no generated rules | (this) |
+| D-020 | 2026-10-20 | One SSH key per environment, host key pinned, plain-language failures | (this) |
 
 ## Entries
 
@@ -200,3 +202,47 @@ Format: id, date, decision, reason, alternatives rejected.
   request shows piling dots) — minimal, no dependency added.
 - **Alternatives rejected:** HTMX partial wiring now (single dependency for one endpoint;
   can be added when partial updates pluralize); websockets (overkill for 3s polling).
+
+### D-019 - Principles live in the project repository, and Caliper never invents a rule
+- **Decision:** The principle files (`.caliper/principles/<key>.md`) in the project repository
+  are the source of truth. Caliper reads them from the default branch, writes them back with a
+  commit on that branch, and keeps only the state in the project manifest: Missing (no file in
+  the repository), Draft (present or edited, not approved) and Approved (approved at a recorded
+  content hash and commit). Editing an approved file resets it to Draft. A new principle file is
+  a heading and one instruction line: there are no generated or pre-filled rules anywhere. A
+  rule is a list item whose text starts with an ID of the form `XXX-NNN`; approval needs at
+  least one rule and unique IDs. The workflow takes its rule IDs from the approved principles
+  and refuses to run a project without them. API: `GET /api/projects/{id}/principles`,
+  `GET /api/projects/{id}/principles/{key}`, `PUT /api/projects/{id}/principles/{key}`,
+  `POST /api/projects/{id}/principles/sync`, `POST /api/projects/{id}/principles/{key}/approve`,
+  `POST /api/projects/{id}/principles/{key}/unapprove`.
+- **Reason:** AGENTS.md 12.4 and 12.8. The old implementation wrote 25 invented rules into
+  `projects/<id>/principles/*.md` on this disk: Caliper judged the human's code against rules it
+  had made up, and the files were not in the repository where the human works.
+- **Alternatives rejected:** keeping the generated rules as a starting point (they are invented,
+  not the project's); keeping the principles on this disk (the repository is the source of truth
+  and the files must survive a reinstall); approving without a content hash (an approval must
+  name the exact content it approves); accepting any text as a rule ID (the reviewer needs a
+  stable ID per rule).
+
+### D-020 - One SSH key per environment, the host key is pinned, failures are plain
+- **Decision:** Every environment (Dev, Prod) gets its own ed25519 key under
+  `CALIPER_SECRETS_DIR` with mode 600; Caliper never stores a password. The API returns the
+  public key, the key path and the exact `ssh-copy-id -i <key path> <user>@<host>` command the
+  human runs once, outside Caliper. The host key is scanned on the first successful connection,
+  pinned in a per-environment `known_hosts` file and shown as a SHA256 fingerprint; a later
+  change fails loudly and names the fix. "Test connection" uses `BatchMode` and checks
+  `ssh <host> true`, `docker compose version` and that the deploy path exists and is writable;
+  every failure is mapped to a plain reason with the exact fix command. The repository gets the
+  same treatment: a per-project deploy key and a read/write probe (`ls-remote` plus a push
+  dry-run). API: `GET /api/projects/{id}/repository`, `POST .../repository/key`,
+  `POST .../repository/test`, `GET /api/projects/{id}/environments`,
+  `PUT /api/projects/{id}/environments/{env}`, `POST .../environments/{env}/key`,
+  `POST .../environments/{env}/test`.
+- **Reason:** AGENTS.md 12.3, 12.5 and 12.8. The old environment test accepted any host key
+  (`StrictHostKeyChecking=accept-new`), so a rebuilt machine was silently trusted, and the
+  failure messages were raw ssh output.
+- **Alternatives rejected:** storing the environment password (credentials are never stored);
+  `accept-new` host keys (a changed host key must fail loudly); one key for both environments
+  (a key per environment keeps the blast radius small and lets one environment be revoked
+  alone); raw command output as the error (the human needs the reason and the fix).

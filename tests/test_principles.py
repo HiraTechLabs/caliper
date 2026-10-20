@@ -125,7 +125,9 @@ def test_approve_rejects_a_principle_without_rules(app):
     response = client.post("/api/projects/shop-api/principles/security/approve")
     assert response.status_code == 422
     assert "no numbered rules" in response.json()["error"]
-    assert registry.principle_records("shop-api")["security"]["state"] == MISSING
+    # The file stays a draft; it was never approved.
+    assert registry.principle_records("shop-api")["security"]["state"] == DRAFT
+    assert registry.principle_records("shop-api")["security"]["approved_commit"] is None
 
 
 def test_approve_rejects_duplicate_rule_ids(app):
@@ -136,7 +138,8 @@ def test_approve_rejects_duplicate_rule_ids(app):
     assert response.status_code == 422
     assert "unique" in response.json()["error"]
     assert "SEC-001" in response.json()["error"]
-    assert registry.principle_records("shop-api")["security"]["state"] == MISSING
+    assert registry.principle_records("shop-api")["security"]["state"] == DRAFT
+    assert registry.principle_records("shop-api")["security"]["approved_commit"] is None
 
 
 def test_approve_rejects_a_file_that_is_not_in_the_repository(app):
@@ -185,6 +188,8 @@ def test_sync_detects_a_file_edited_outside_caliper_and_drops_the_approval(app, 
     assert registry.principle_records("shop-api")["security"]["state"] == APPROVED
 
     work = bare.parent / "shop-api.git-work"
+    subprocess.run(["git", "-C", str(work), "fetch", "origin", "main"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(work), "reset", "--hard", "origin/main"], check=True, capture_output=True)
     (work / ".caliper" / "principles").mkdir(parents=True, exist_ok=True)
     (work / ".caliper" / "principles" / "security.md").write_text(
         "# Security\n\n- SEC-001: changed by a human in the repository\n", encoding="utf-8"

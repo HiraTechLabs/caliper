@@ -70,3 +70,14 @@ def test_unknown_request_raises(env):
     _, _, workflow = env
     with pytest.raises(WorkflowError, match="does not exist"):
         workflow.run("req-9")
+
+
+def test_run_refuses_a_project_without_approved_principles(tmp_path):
+    registry = ProjectRegistry(tmp_path / "projects")
+    registry.create_project(name="Shop API", repo_mode="create_new")
+    requests = RequestStore(tmp_path / "state.sqlite3")
+    workflow = Workflow(requests, registry, tmp_path / "projects")
+    req = requests.create("shop-api", "feature", "Add refund endpoint")
+
+    with pytest.raises(WorkflowError, match="approved principle rules"):
+        workflow.run(req["id"])

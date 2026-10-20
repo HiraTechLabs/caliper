@@ -30,7 +30,7 @@ class GitRepo:
         return (self.root / ".git").is_dir()
 
     def _git(self, args: list[str], cwd: Path | None = None) -> tuple[int, str]:
-        return _run(["git", *args], cwd=cwd, env=_git_env(self.key_path))
+        return _run(["git", *args], cwd=cwd or self.root, env=_git_env(self.key_path))
 
     def remote_url(self) -> str:
         try:
@@ -41,7 +41,8 @@ class GitRepo:
     def default_branch(self) -> str:
         """The branch the remote points HEAD at."""
         code, output = self._git(
-            ["ls-remote", "--symref", self.remote_url(), "HEAD"], cwd=self.root if self.cloned else None
+            ["ls-remote", "--symref", self.remote_url(), "HEAD"],
+            cwd=self.root if self.cloned else self.root.parent,
         )
         if code != 0:
             raise RepoError(f"Cannot read the repository: {output or 'git ls-remote failed'}")
