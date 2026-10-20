@@ -2,11 +2,36 @@ import pathlib
 
 import yaml
 
+from caliper.http_models import ChatClient, HTTPExecutionModel, HTTPPlanningModel, HTTPReviewModel
+from caliper.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel
+
 ROLE_ORDER = ("planning", "execution", "review")
 
 
 class ModelsConfigError(Exception):
     pass
+
+
+def make_adapters(config: dict, transports: dict | None = None) -> dict:
+    """Build role -> model adapter instances from a validated config.
+
+    AI roles are disabled by default: config ships with adapter: mock.
+    transports: optional per-role test transport for HTTP adapters.
+    """
+    transports = transports or {}
+    classes = {
+        "http": {"planning": HTTPPlanningModel, "execution": HTTPExecutionModel, "review": HTTPReviewModel},
+        "mock": {"planning": MockPlanningModel, "execution": MockExecutionModel, "review": MockReviewModel},
+    }
+    adapters = {}
+    for role in ROLE_ORDER:
+        entry = config[role]
+        if entry["adapter"] == "http":
+            client = ChatClient(entry["model"], entry["base_url"], transport=transports.get(role))
+            adapters[role] = classes["http"][role](client)
+        else:
+            adapters[role] = classes["mock"][role]()
+    return adapters
 
 
 def load_models_config(path) -> dict:

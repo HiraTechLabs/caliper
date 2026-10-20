@@ -22,10 +22,14 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
     if requests is None:
         db_path = os.environ.get("CALIPER_DB_PATH", str(BASE_DIR.parent / ".caliper-state" / "state.sqlite3"))
         requests = RequestStore(db_path)
+    from caliper.models_config import load_models_config, make_adapters
     from caliper.workflow import Workflow
+    models_config_path = os.environ.get("CALIPER_MODELS_CONFIG", str(BASE_DIR / "models.yaml"))
+    config = load_models_config(models_config_path)
+    adapters = make_adapters(config)
     artifacts_root = Path(os.environ.get("CALIPER_PROJECTS_ROOT", str(BASE_DIR.parent / "projects")))
     if workflow is None:
-        workflow = Workflow(requests, registry, artifacts_root)
+        workflow = Workflow(requests, registry, artifacts_root, planning=adapters["planning"], execution=adapters["execution"], review=adapters["review"])
     app = FastAPI(title="Caliper", version="0.1.0")
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=BASE_DIR / "templates")
