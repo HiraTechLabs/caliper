@@ -9,14 +9,18 @@ from fastapi.templating import Jinja2Templates
 
 from caliper.principles import PRINCIPLES
 from caliper.registry import STACK_PRESETS, ProjectError, ProjectRegistry
+from caliper.state import VALID_KINDS, RequestStore
 
 BASE_DIR = Path(__file__).resolve().parent
 
 
-def create_app(registry: ProjectRegistry | None = None) -> FastAPI:
+def create_app(registry: ProjectRegistry | None = None, requests: RequestStore | None = None) -> FastAPI:
     if registry is None:
         projects_root = os.environ.get("CALIPER_PROJECTS_ROOT", str(BASE_DIR.parent / "projects"))
         registry = ProjectRegistry(Path(projects_root))
+    if requests is None:
+        db_path = os.environ.get("CALIPER_DB_PATH", str(BASE_DIR.parent / ".caliper-state" / "state.sqlite3"))
+        requests = RequestStore(db_path)
     app = FastAPI(title="Caliper", version="0.1.0")
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=BASE_DIR / "templates")
@@ -58,7 +62,37 @@ def create_app(registry: ProjectRegistry | None = None) -> FastAPI:
         except ProjectError:
             return templates.TemplateResponse(request, "project_missing.html", {"project_id": project_id}, status_code=404)
         manifest["stack_label"] = STACK_PRESETS.get(manifest["stack_preset"], manifest["stack_preset"])
-        return templates.TemplateResponse(request, "project_detail.html", {"project": manifest})
+        return templates.TemplateResponse(request, "project_detail.html", {
+            "project": manifest,
+            "requests": requests.list_for_project(project_id),
+        })
+
+    @app.get("/projects/{project_id}/requests/new", response_class=HTMLResponse)
+    async def request_new(request: Request, project_id: str):
+        try:
+            manifest = registry.get_project(project_id)
+        except ProjectError:
+            return templates.TemplateResponse(request, "project_missing.html", {"project_id": project_id}, status_code=404)
+        return templates.TemplateResponse(request, "request_new.html", {"project": manifest, "error": None, "values": {}})
+
+    @app.post("/projects/{project_id}/requests/new")
+    async def request_create(request: Request, project_id: str, kind: str = Form("feature"), text: str = Form(""), extra: str = Form("")):
+        try:
+            manifest = registry.get_project(project_id)
+            req = requests.create(project_id=project_id, kind=kind if kind in VALID_KINDS else "feature", text=text, extra=extra or None)
+        except ProjectError:
+            return templates.TemplateResponse(request, "project_missing.html", {"project_id": project_id}, status_code=404)
+        except ValueError as exc:
+            context = {"project": manifest, "error": str(exc), "values": {"kind": kind, "text": text, "extra": extra}}
+            return templates.TemplateResponse(request, "request_new.html", context, status_code=422)
+        return RedirectResponse(f"/requests/{req['id']}", status_code=303)
+
+    @app.get("/requests/{req_id}", response_class=HTMLResponse)
+    async def request_detail(request: Request, req_id: str):
+        req = requests.get(req_id)
+        if req is None:
+            return templates.TemplateResponse(request, "request_missing.html", {"req_id": req_id}, status_code=404)
+        return templates.TemplateResponse(request, "request_detail.html", {"req": req})
 
     return app
 

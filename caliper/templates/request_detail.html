@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ req.project_id }}: {{ req.id }} - Caliper{% endblock %}
+{% block content %}
+<h1 class="page-title">{{ req.id }} · {{ req.kind }}</h1>
+<p class="muted">{{ req.project_id }} · submitted {{ req.created_at }}</p>
+<div class="card request-body">
+  <p>{{ req.text }}</p>
+  {% if req.extra %}
+  <details>
+    <summary class="muted">Error / log</summary>
+    <pre class="principle-content">{{ req.extra }}</pre>
+  </details>
+  {% endif %}
+</div>
+<p class="muted placeholder-note">Pipeline is not wired yet. Next step requires planning, execution and review models.</p>
+{% endblock %}

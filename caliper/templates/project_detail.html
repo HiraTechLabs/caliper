@@ -1,14 +1,39 @@
 {% extends "base.html" %}
+{% from "_components.html" import status_pill %}
 {% block title %}{{ project.name }} - Caliper{% endblock %}
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">{{ project.name }}</h1>
   <span class="pill">{{ project.stack_label }}</span>
+  <a class="btn primary head-action" href="/projects/{{ project.id }}/requests/new">+ New request</a>
 </div>
 <p class="muted">
   {% if project.repo.mode == 'existing' %}Repo: <span class="mono">{{ project.repo.url }}</span>{% else %}Repo: to be created.{% endif %}
   {% if project.product %} Product: <span class="mono">{{ project.product }}</span>{% endif %}
 </p>
+
+<section class="detail-section">
+  <h2>Requests</h2>
+  {% if requests %}
+  <ul class="request-list">
+    {% for req in requests %}
+    <li class="card request-card">
+      <a class="request-link" href="/requests/{{ req.id }}">
+        {{ status_pill(req.status) }}
+        <span class="request-text">{{ req.text[:120] }}</span>
+        <span class="mono muted">{{ req.kind }} · {{ req.id }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state card">
+    <div class="empty-icon">&#9997;</div>
+    <p>No requests yet. Tell Caliper what you want — it plans, executes and reviews.</p>
+    <a class="btn primary" href="/projects/{{ project.id }}/requests/new">Add feature</a>
+  </div>
+  {% endif %}
+</section>
 
 <section class="detail-section">
   <h2>Environments</h2>

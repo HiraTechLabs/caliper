@@ -1,0 +1,44 @@
+{% macro project_row(p) %}
+<span class="project-name">{{ p.name }}</span>
+<span class="muted">{{ p.stack_label }}</span>
+{% endmacro %}
+
+{% macro composer(project, action, error=None, values={}) %}
+{% if error %}
+<div class="alert danger" role="alert">{{ error }}</div>
+{% endif %}
+<form class="form card" method="post" action="{{ action }}">
+  <div class="segmented">
+    <label><input type="radio" name="kind" value="feature" {% if not values.get('kind') == 'bugfix' %}checked{% endif %}> Feature</label>
+    <label><input type="radio" name="kind" value="bugfix" {% if values.get('kind') == 'bugfix' %}checked{% endif %}> Bug</label>
+  </div>
+  <div class="field">
+    <label for="text">{{ "What broke?" if values.get('kind') == 'bugfix' else "What do you want?" }}</label>
+    <textarea id="text" name="text" rows="5" autofocus>{{ values.get('text', '') }}</textarea>
+  </div>
+  <details class="field attach">
+    <summary>+ Add error / log (optional)</summary>
+    <textarea name="extra" rows="4" placeholder="Paste the error or log here">{{ values.get('extra', '') }}</textarea>
+  </details>
+  <div class="form-actions">
+    <a class="btn ghost" href="/projects/{{ project.id }}">Cancel</a>
+    <button class="btn primary" type="submit">Submit</button>
+  </div>
+</form>
+{% endmacro %}
+
+{% macro status_pill(status) %}
+  {% set labels = {
+    'submitted': ['submitted', 'pill status-neutral'],
+    'planning': ['Planning', 'pill status-planning'],
+    'executing': ['Executing', 'pill status-executing'],
+    'reviewing': ['Reviewing', 'pill status-reviewing'],
+    'awaiting_approval': ['Awaiting approval', 'pill status-awaiting'],
+    'merged': ['Merged', 'pill status-merged'],
+    'deployed_dev': ['Merged', 'pill status-merged'],
+    'live': ['Live', 'pill status-merged'],
+    'failed': ['Failed', 'pill status-failed']
+  } %}
+  {% set pill = labels.get(status, [status, 'pill status-neutral']) %}
+  <span class="{{ pill[1] }}"><span class="dot"></span>{{ pill[0] }}</span>
+{% endmacro %}

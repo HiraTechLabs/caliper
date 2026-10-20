@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Not found - Caliper{% endblock %}
+{% block content %}
+<div class="empty-state card">
+  <div class="empty-icon">&#128683;</div>
+  <p>Request '{{ req_id }}' does not exist. It may have been deleted or was never created.</p>
+  <a class="btn primary" href="/">Back to projects</a>
+</div>
+{% endblock %}
