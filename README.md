@@ -54,7 +54,7 @@ the network; all setup works without a desktop session.
 
 ```
 AGENTS.md    repo rules (read first)
-docs/        self-documentation: policies, system docs
+docs/        self-documentation: AGENTS rules of work are in docs/DECISIONS.md, docs/GRAPH.md, docs/UI_SYSTEM.md (draft, awaiting human approval)
 caliper/     application package with a single headless FastAPI endpoint (/health)
 tests/       tests (one passing smoke test)
 ```

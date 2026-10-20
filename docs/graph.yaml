@@ -1,0 +1,21 @@
+# graph.yaml — Caliper component graph (source of truth)
+# docs/GRAPH.md is the human-readable view; this file is authoritative.
+# CI graph-check (when wired) fails if any edge references a missing component.
+
+nodes:
+  - id: app-core
+    path: caliper/main.py
+    kind: application
+    description: >
+      FastAPI application factory. Currently the scaffold bootstrap only:
+      exposes GET /health and the run() entrypoint (bind 127.0.0.1:8080 by default).
+  - id: tests
+    path: tests/
+    kind: test-suite
+    description: >
+      Test suite. Currently one smoke test proving app-core boots and /health responds.
+
+edges:
+  - from: tests
+    to: app-core
+    relation: tests
