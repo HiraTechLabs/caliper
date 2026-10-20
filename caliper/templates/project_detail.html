@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} - Caliper{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">{{ project.name }}</h1>
+  <span class="pill">{{ project.stack_label }}</span>
+</div>
+<p class="muted">
+  {% if project.repo.mode == 'existing' %}Repo: <span class="mono">{{ project.repo.url }}</span>{% else %}Repo: to be created.{% endif %}
+  {% if project.product %} Product: <span class="mono">{{ project.product }}</span>{% endif %}
+</p>
+
+<section class="detail-section">
+  <h2>Environments</h2>
+  <div class="env-grid">
+    <div class="card">
+      <h3>Dev</h3>
+      <p class="muted">Not configured yet.</p>
+      <span class="helper">Every change lands here first.</span>
+    </div>
+    <div class="card">
+      <h3>Prod</h3>
+      <p class="muted">Not configured yet.</p>
+      <span class="helper">Reachable only after human approval.</span>
+    </div>
+  </div>
+</section>
+
+<section class="detail-section">
+  <h2>Principles</h2>
+  <p class="muted">Six principle files, numbered and checkable. Plans cite these rule IDs; reviews judge against them.</p>
+  <div class="principles-grid">
+    {% for principle in project.principles %}
+    <details class="card principle-card">
+      <summary>{{ principle.title }}</summary>
+      <pre class="principle-content">{{ principle.content }}</pre>
+    </details>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

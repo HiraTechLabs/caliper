@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Caliper{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <span class="brand">Caliper</span>
+        <button class="theme-toggle" type="button" aria-label="Toggle dark mode">&#9681;</button>
+      </div>
+      <nav class="sidebar-projects">
+        <span class="sidebar-label">PROJECTS</span>
+        {% for project in projects %}
+          <a class="sidebar-project" href="/projects/{{ project.id }}">{{ project.name }}</a>
+        {% endfor %}
+        <a class="sidebar-project add" href="/projects/new">+ New project</a>
+      </nav>
+    </aside>
+    <main class="main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script>
+    document.querySelector(".theme-toggle").addEventListener("click", function () {
+      document.documentElement.classList.toggle("dark");
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}New project - Caliper{% endblock %}
+{% block content %}
+<h1 class="page-title">New project</h1>
+<p class="muted">Principles are pre-filled from the stack preset. You can edit them later on the project page.</p>
+{% if error %}
+<div class="alert danger" role="alert">{{ error }}</div>
+{% endif %}
+<form class="form card" method="post" action="/projects/new">
+  <div class="field">
+    <label for="name">Name</label>
+    <input id="name" name="name" type="text" value="{{ values.get('name', '') }}" autofocus autocomplete="off">
+    <span class="helper">Used as the project id: lowercase, dashes allowed.</span>
+  </div>
+  <fieldset class="field">
+    <legend>Repository</legend>
+    <div class="segmented">
+      <label><input type="radio" name="repo_mode" value="create_new" {% if values.get('repo_mode','create_new') == 'create_new' %}checked{% endif %}> Create new</label>
+      <label><input type="radio" name="repo_mode" value="existing" {% if values.get('repo_mode') == 'existing' %}checked{% endif %}> Use existing URL</label>
+    </div>
+    <input id="repo_url" name="repo_url" type="text" placeholder="https://git.example.com/org/repo.git" value="{{ values.get('repo_url', '') }}" autocomplete="off">
+  </fieldset>
+  <div class="field">
+    <label for="stack_preset">Stack preset</label>
+    <select id="stack_preset" name="stack_preset">
+      {% for key, label in presets.items() %}
+      <option value="{{ key }}" {% if values.get('stack_preset', 'python-fastapi') == key %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="form-actions">
+    <button class="btn primary" type="submit">Create project</button>
+  </div>
+</form>
+{% endblock %}

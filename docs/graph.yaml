@@ -7,15 +7,61 @@ nodes:
     path: caliper/main.py
     kind: application
     description: >
-      FastAPI application factory. Currently the scaffold bootstrap only:
-      exposes GET /health and the run() entrypoint (bind 127.0.0.1:8080 by default).
+      FastAPI application factory and HTTP surface: GET /health,
+      project list / create / detail pages, and the run() entrypoint
+      (bind 127.0.0.1:8080 by default; env overrides CALIPER_HOST/CALIPER_PORT).
+  - id: project-registry
+    path: caliper/registry.py
+    kind: domain
+    description: >
+      ProjectRegistry: creates/lists/loads projects under
+      CALIPER_PROJECTS_ROOT (default <repo>/projects), writing manifest.yaml
+      (incl. optional product field and dev/prod environment definitions)
+      and the six principles/<key>.md files. ProjectError for validation.
+  - id: principles-templates
+    path: caliper/principles.py
+    kind: domain
+    description: >
+      Principle definitions (title + numbered checkable rule IDs such as
+      SEC-001) and the per-file renderer used when a project is created.
+  - id: app-ui
+    path: caliper/templates
+    kind: presentation
+    description: >
+      Jinja2 templates rendered server-side by app-core
+      (base layout + sidebar, project list, add-project form, project
+      detail, not-found page) with static/style.css implementing
+      UI_SYSTEM tokens. Plain form POST; HTMX not introduced yet.
+  - id: project-store
+    path: projects/
+    kind: data-store
+    description: >
+      Runtime-only project data written by project-registry
+      (one directory per project). Not part of the Caliper git repo;
+      location overridable via CALIPER_PROJECTS_ROOT.
   - id: tests
     path: tests/
     kind: test-suite
     description: >
-      Test suite. Currently one smoke test proving app-core boots and /health responds.
+      pytest suite: smoke test on app-core, registry behavior tests,
+      and UI flow tests over create/list/detail through TestClient.
 
 edges:
+  - from: app-core
+    to: project-registry
+    relation: uses
+  - from: project-registry
+    to: principles-templates
+    relation: renders-and-writes
+  - from: project-registry
+    to: project-store
+    relation: writes
+  - from: app-ui
+    to: project-registry
+    relation: displays-data-from
   - from: tests
     to: app-core
+    relation: tests
+  - from: tests
+    to: project-registry
     relation: tests

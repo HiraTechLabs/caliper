@@ -54,9 +54,10 @@ the network; all setup works without a desktop session.
 
 ```
 AGENTS.md    repo rules (read first)
-docs/        self-documentation: AGENTS rules of work are in docs/DECISIONS.md, docs/GRAPH.md, docs/UI_SYSTEM.md (draft, awaiting human approval)
-caliper/     application package with a single headless FastAPI endpoint (/health)
-tests/       tests (one passing smoke test)
+docs/        self-documentation: docs/DECISIONS.md, docs/GRAPH.md + graph.yaml, docs/UI_SYSTEM.md (draft, awaiting human approval)
+caliper/     application package: FastAPI app, project registry, Jinja2 templates + static CSS
+projects/    runtime data (created on first project; not committed; CALIPER_PROJECTS_ROOT overrides)
+tests/       tests (registry behavior, UI flows, smoke)
 ```
 
 ## CI
@@ -69,5 +70,7 @@ CI has exactly three jobs (to be wired as they become relevant):
 
 ## Status
 
-Step 1 (scaffold) only. Nothing else exists yet — no project registry, no models, no UI. See
-`AGENTS.md` for the work order.
+Step 3 (project registry) done: create/list/view a project from the UI; each project gets a
+`manifest.yaml` (repo, optional `product:`, dev/prod environments) and 6 principles files
+with numbered checkable rule IDs. Nothing else exists yet — no request intake, no models, no
+workflow. See `AGENTS.md` for the work order.

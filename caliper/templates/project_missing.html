@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Not found - Caliper{% endblock %}
+{% block content %}
+<div class="empty-state card">
+  <div class="empty-icon">&#128683;</div>
+  <p>Project '{{ project_id }}' does not exist. It may have been renamed or was never created.</p>
+  <a class="btn primary" href="/projects/new">New project</a>
+</div>
+{% endblock %}

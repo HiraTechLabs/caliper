@@ -14,6 +14,10 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-005 | 2026-10-20 | `UI_SYSTEM.md` lives in `docs/`, content untouched, status DRAFT | 5d9a9b0 |
 | D-006 | 2026-10-20 | Self-documentation files created in step 2, retro-recording step-1 choices | (this) |
 | D-007 | 2026-10-20 | CI wiring deferred until each job's inputs exist | (this) |
+| D-008 | 2026-10-20 | Projects stored at `projects/<id>/` with manifest + 6 principles | (this) |
+| D-009 | 2026-10-20 | One stack preset (`python-fastapi`) for now | (this) |
+| D-010 | 2026-10-20 | Projects root configurable via `CALIPER_PROJECTS_ROOT` | (this) |
+| D-011 | 2026-10-20 | Step-3 UI built from draft UI_SYSTEM.md | (this) |
 
 ## Entries
 
@@ -76,3 +80,44 @@ Format: id, date, decision, reason, alternatives rejected.
   (no stub jobs).
 - **Alternatives rejected:** wiring `test` job only (arbitrary subset; all three should
   appear together with meaningful checks per AGENTS.md section 8).
+
+### D-008 — Projects stored at `projects/<id>/` on the control plane
+- **Decision:** Each project is a directory `projects/<id>/` containing `manifest.yaml` and
+  `principles/{security,business,architecture,techstack,cleancode,performance}.md`, created by
+  `ProjectRegistry` (caliper/registry.py). Manifest carries: id, name, created_at,
+  stack_preset, repo `{mode, url}`, optional `product:`, and environment definitions
+  (`dev`/`prod` with host + deploy command, initially blank).
+- **Reason:** Matches AGENTS.md section 4's path convention. Git backend for repos arrives
+  with the git layer (later steps); the optional `product:` field is accepted and stored now
+  per section 11, with no product-level behavior attached.
+- **Alternatives rejected:** SQLite for project definitions (Git/files are the source of
+  truth; SQLite is for run state only, section 7b); creating actual git repos now (no git
+  layer yet); putting product features behind the field (explicitly not allowed).
+
+### D-009 — One stack preset (`python-fastapi`) for now
+- **Decision:** The Add-project form ships with a `Stack preset` field containing a single
+  option, "Python + FastAPI".
+- **Reason:** AGENTS.md fixes the stack; presets may only be extended via a Decision entry.
+  The field is kept so the form shape does not change when presets are added.
+- **Alternatives rejected:** dropping the field (form would change later); inventing extra
+  presets without decisions.
+
+### D-010 — Configurable projects root via `CALIPER_PROJECTS_ROOT`
+- **Decision:** Project storage root defaults to `<repo>/projects` and can be overridden
+  with the `CALIPER_PROJECTS_ROOT` env var.
+- **Reason:** Keeps runtime data out of the repo/copy of Caliper when deployed; lets
+  integration tests and demos point at isolated directories, consistent with the existing
+  `CALIPER_HOST`/`CALIPER_PORT` env pattern.
+- **Alternatives rejected:** hardcoding one path (breaks deployment); storing inside the
+  git repo as runtime data.
+
+### D-011 — Step-3 UI built from the draft UI_SYSTEM.md (human-approved to proceed)
+- **Decision:** Three screens (project list with EmptyState, Add-project form with exactly 3
+  fields, project detail) built with Jinja2 server rendering, plain form POST (no HTMX yet),
+  using only existing UI_SYSTEM components: Sidebar, Card, Button, Field, EmptyState,
+  StatusPill (detail), and a light/dark theme toggle. No new component types were introduced.
+- **Reason:** Step 3's definition of done requires the registry to be visible in the UI; the
+  human approved proceeding to step 3, which includes these screens. `UI_SYSTEM.md` stays
+  DRAFT pending final sign-off — no page content depends on parts not in the draft.
+- **Alternatives rejected:** API-only step 3 (invisible to the human); HTMX partials now
+  (no state to update live yet); new components (requires a Decision entry first).

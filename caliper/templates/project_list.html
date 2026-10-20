@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Projects - Caliper{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Projects</h1>
+</div>
+
+{% if projects %}
+<ul class="project-list">
+  {% for project in projects %}
+  <li class="card project-card">
+    <a class="project-link" href="/projects/{{ project.id }}">
+      <span class="project-name">{{ project.name }}</span>
+      <span class="muted">{{ project.stack_label }}</span>
+      <span class="muted mono">{{ project.repo.mode == 'existing' and project.repo.url or 'repo created later' }}</span>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="empty-state card">
+  <div class="empty-icon">&#128203;</div>
+  <p>No projects yet. Add your first project to start the workflow.</p>
+  <a class="btn primary" href="/projects/new">New project</a>
+</div>
+{% endif %}
+{% endblock %}
