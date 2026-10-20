@@ -242,6 +242,20 @@ def test_a_missing_deploy_path_is_reported_with_the_fix_command(tmp_path, monkey
     assert "ssh deploy@dev.example.com 'mkdir -p /srv/app'" in message
 
 
+def test_a_host_that_does_not_resolve_is_reported_in_plain_language(tmp_path, monkeypatch):
+    runner = FakeRunner(failures={"ssh-keyscan": (1, "getaddrinfo dev.example.com: No such host is known")})
+    monkeypatch.setattr("caliper.remote._run", runner)
+    key_path = tmp_path / "env_dev"
+    key_path.write_text("PRIVATE KEY", encoding="utf-8")
+
+    with pytest.raises(RemoteError) as error:
+        check_environment("dev.example.com", "deploy", key_path, deploy_path="/srv/app",
+                          known_hosts_path=tmp_path / "known_hosts")
+    message = str(error.value)
+    assert "does not resolve" in message
+    assert "No such host" not in message
+
+
 def test_a_failed_test_is_reported_by_the_api(registry, tmp_path, monkeypatch):
     runner = FakeRunner(failures={" true": (255, "connect to host dev.example.com port 22: Connection refused")})
     monkeypatch.setattr("caliper.remote._run", runner)

@@ -155,13 +155,26 @@ def _fingerprint_of(key_line: str) -> str:
     return "SHA256:" + base64.b64encode(digest).decode("ascii").rstrip("=")
 
 
+def _host_key_failure(host: str, output: str) -> str:
+    """Plain-language reason for a host key that could not be read."""
+    text = (output or "").lower()
+    if "no such host" in text or "not known" in text or "name or service not known" in text:
+        return f"The host {host} does not resolve. Check the host name."
+    if "connection refused" in text:
+        return f"Nothing is listening for SSH on {host}. Check the host and the firewall."
+    if "timed out" in text or "timeout" in text:
+        return f"The host {host} did not answer in time. Check the host and the firewall."
+    lines = list(dict.fromkeys(line.strip() for line in (output or "").splitlines() if line.strip()))
+    return f"Cannot read the host key of {host}: {' '.join(lines) or 'ssh-keyscan failed'}"
+
+
 def scan_host_key(host: str, port: int = 22) -> tuple[str, str]:
     """Read the host key of a machine. Returns (fingerprint, key line)."""
     keyscan = shutil.which("ssh-keyscan")
     if not keyscan:
         raise RemoteError("ssh-keyscan is not installed; the host key cannot be pinned.")
     if not host or any(ch.isspace() for ch in host):
-        raise RemoteError("Host and user are required and may not contain spaces.")
+        raise RemoteError("Host is required and may not contain spaces.")
     command = [keyscan, "-T", "10", "-t", ",".join(HOST_KEY_TYPES)]
     if port and int(port) != 22:
         command += ["-p", str(port)]
@@ -173,7 +186,7 @@ def scan_host_key(host: str, port: int = 22) -> tuple[str, str]:
         if len(parts) >= 3 and parts[1] in HOST_KEY_TYPES:
             lines.append(line.strip())
     if not lines:
-        raise RemoteError(f"Cannot read the host key of {host}: {output or 'ssh-keyscan failed'}")
+        raise RemoteError(_host_key_failure(host, output))
     for line in lines:
         if line.split()[1] == "ssh-ed25519":
             return _fingerprint_of(line), line
