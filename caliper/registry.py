@@ -116,6 +116,7 @@ class ProjectRegistry:
         if not path.is_file():
             raise ProjectError(f"Project '{project_id}' does not exist.")
         manifest = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        manifest.setdefault("stack_preset", "")
         repo = manifest.setdefault("repo", {})
         repo.setdefault("mode", "existing")
         repo.setdefault("url", None)

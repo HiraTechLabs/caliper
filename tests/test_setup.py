@@ -105,3 +105,40 @@ def test_missing_project_returns_a_plain_error(app):
     response = client.get("/api/projects/ghost/repository")
     assert response.status_code == 404
     assert "does not exist" in response.json()["error"]
+
+
+def test_a_manifest_written_by_an_older_caliper_does_not_break_the_pages(tmp_path):
+    registry = ProjectRegistry(
+        tmp_path / "projects", secrets_dir=tmp_path / "secrets", key_generator=_key_generator
+    )
+    directory = registry.projects_root / "caliper"
+    directory.mkdir(parents=True)
+    (directory / "manifest.yaml").write_text(
+        "id: caliper\n"
+        "name: Caliper\n"
+        "created_at: '2026-10-20T16:08:48+00:00'\n"
+        "repo:\n"
+        "  url: https://github.com/example/caliper\n"
+        "  verified: true\n"
+        "product: null\n"
+        "principles_status:\n"
+        "  security: draft\n"
+        "  business: draft\n"
+        "environments:\n"
+        "  dev:\n"
+        "    host: ''\n"
+        "    deploy: docker compose up -d\n",
+        encoding="utf-8",
+    )
+    client = TestClient(create_app(registry=registry, requests=RequestStore(tmp_path / "state.sqlite3")))
+
+    assert client.get("/").status_code == 200
+    assert client.get("/projects").status_code == 200
+    page = client.get("/projects/caliper")
+    assert page.status_code == 200
+    assert "Caliper" in page.text
+    # The old flags cannot survive: there is no file in the repository and no hash or
+    # commit behind an old approval, so nothing is approved and the file is missing.
+    records = registry.principle_records("caliper")
+    assert records["security"]["state"] == "missing"
+    assert records["security"]["approved_commit"] is None

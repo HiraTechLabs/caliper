@@ -43,7 +43,7 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
     def _ui_ctx(**extra):
         projects = registry.list_projects()
         for project in projects:
-            project["stack_label"] = STACK_PRESETS.get(project["stack_preset"], project["stack_preset"])
+            project["stack_label"] = STACK_PRESETS.get(project.get("stack_preset") or "", "")
         return {"projects": projects, **extra}
 
     @app.get("/health")
@@ -173,7 +173,7 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             manifest = registry.get_project(project_id)
         except ProjectError:
             return templates.TemplateResponse(request, "project_missing.html", _ui_ctx(project_id=project_id), status_code=404)
-        manifest["stack_label"] = STACK_PRESETS.get(manifest["stack_preset"], manifest["stack_preset"])
+        manifest["stack_label"] = STACK_PRESETS.get(manifest.get("stack_preset") or "", "")
         return templates.TemplateResponse(request, "project_detail.html", _ui_ctx(
             project=manifest,
             requests=requests.list_for_project(project_id),
