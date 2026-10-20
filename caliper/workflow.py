@@ -4,6 +4,13 @@ from pathlib import Path
 from caliper.mock_models import MAX_LOOPS, MockExecutionModel, MockPlanningModel, MockReviewModel, WorkflowError
 
 
+class MockDeployAdapter:
+    """Stand-in for the SSH/docker deploy adapter. Records the deploy only."""
+
+    def deploy(self, project: dict, env: str, req: dict) -> str:
+        return f"[mock-deploy] {project['id']} -> {env} for {req['id']}"
+
+
 def validate_review(review: dict) -> None:
     if not isinstance(review, dict) or "verdicts" not in review:
         raise WorkflowError("Review output is invalid: no 'verdicts' key.")
@@ -19,13 +26,14 @@ def failed_rules(review: dict) -> list[str]:
 
 
 class Workflow:
-    def __init__(self, requests, registry, artifacts_root: Path, planning=None, execution=None, review=None):
+    def __init__(self, requests, registry, artifacts_root: Path, planning=None, execution=None, review=None, deploy=None):
         self.requests = requests
         self.registry = registry
         self.artifacts_root = Path(artifacts_root)
         self.planning = planning or MockPlanningModel()
         self.execution = execution or MockExecutionModel()
         self.review = review or MockReviewModel()
+        self.deploy = deploy or MockDeployAdapter()
 
     def artifact_dir(self, req_id: str) -> Path:
         req = self.requests.get(req_id)
@@ -70,3 +78,44 @@ class Workflow:
                 return self.requests.get(req_id)
             self.requests.update(req_id, status="awaiting_approval")
             return self.requests.get(req_id)
+
+    def _expect(self, req_id: str, *statuses: str) -> dict:
+        req = self.requests.get(req_id)
+        if req is None:
+            raise WorkflowError(f"Request '{req_id}' does not exist.")
+        if req["status"] not in statuses:
+            expected = " or ".join(statuses)
+            raise WorkflowError(f"Request {req_id} is '{req['status']}', expected '{expected}'.")
+        return req
+
+    def request_changes(self, req_id: str, note: str) -> dict:
+        req = self._expect(req_id, "awaiting_approval")
+        if not note or not note.strip():
+            raise WorkflowError("A note is required when requesting changes.")
+        req = self.requests.update(req_id, status="executing", review_note=note.strip())
+        dir = self.artifact_dir(req_id)
+        with (dir / "human-feedback.log").open("a", encoding="utf-8") as f:
+            f.write(note.strip() + "\n")
+        self.requests.update(req_id, status="reviewing")
+        return self.requests.get(req_id)
+
+    def approve_merge(self, req_id: str) -> dict:
+        req = self._expect(req_id, "awaiting_approval")
+        project = self.registry.get_project(req["project_id"])
+        (self.artifact_dir(req_id) / "merged.marker").write_text("merged with human approval\n", encoding="utf-8")
+        self.requests.update(req_id, status="merged")
+        return self.deploy_dev(req_id)
+
+    def deploy_dev(self, req_id: str) -> dict:
+        req = self._expect(req_id, "merged", "deployed_dev")
+        project = self.registry.get_project(req["project_id"])
+        record = self.deploy.deploy(project, "dev", req)
+        (self.artifact_dir(req_id) / "deploy-dev.log").write_text(record + "\n", encoding="utf-8")
+        return self.requests.update(req_id, status="deployed_dev")
+
+    def approve_prod(self, req_id: str) -> dict:
+        req = self._expect(req_id, "deployed_dev")
+        project = self.registry.get_project(req["project_id"])
+        record = self.deploy.deploy(project, "prod", req)
+        (self.artifact_dir(req_id) / "deploy-prod.log").write_text(record + "\n", encoding="utf-8")
+        return self.requests.update(req_id, status="live")

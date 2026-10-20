@@ -161,6 +161,12 @@ textarea {
 
 .diff { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; line-height: 1.5; }
 
+.form-actions .inline-form { display: flex; align-items: center; gap: 8px; }
+.btn.secondary { background: var(--surface-2); }
+.btn.ghost { border-color: transparent; }
+.confirm-dialog .confirm-body { margin-top: 8px; max-width: 420px; }
+.note { background: var(--surface-2); border-left: 3px solid var(--accent); padding: 8px 12px; border-radius: 0 8px 8px 0; margin: 12px 0; }
+
 .detail-section { margin-top: 32px; }
 .env-grid, .principles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
 .principle-card summary { cursor: pointer; font-weight: 500; }

@@ -27,7 +27,8 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
     models_config_path = os.environ.get("CALIPER_MODELS_CONFIG", str(BASE_DIR / "models.yaml"))
     config = load_models_config(models_config_path)
     adapters = make_adapters(config)
-    artifacts_root = Path(os.environ.get("CALIPER_PROJECTS_ROOT", str(BASE_DIR.parent / "projects")))
+    artifacts_root_override = os.environ.get("CALIPER_ARTIFACTS_ROOT")
+    artifacts_root = Path(artifacts_root_override) if artifacts_root_override else Path(registry.projects_root)
     if workflow is None:
         workflow = Workflow(requests, registry, artifacts_root, planning=adapters["planning"], execution=adapters["execution"], review=adapters["review"])
     app = FastAPI(title="Caliper", version="0.1.0")
@@ -124,13 +125,35 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
 
     @app.post("/requests/{req_id}/run")
     async def request_run(request: Request, req_id: str):
-        if requests.get(req_id) is None:
-            return templates.TemplateResponse(request, "request_missing.html", {"req_id": req_id}, status_code=404)
         try:
-            updated = workflow.run(req_id)
-        except Exception as exc:  #WFError only
+            workflow.run(req_id)
+        except Exception as exc:
             req = requests.get(req_id)
-            return templates.TemplateResponse(request, "request_run_error.html", {"req_id": req_id, "reason": str(exc), "req": req}, status_code=500)
+            return templates.TemplateResponse(request, "request_run_error.html", {"req_id": req_id, "reason": str(exc), "req": req}, status_code=422)
+        return RedirectResponse(f"/requests/{req_id}", status_code=303)
+
+    @app.post("/requests/{req_id}/approve")
+    async def request_approve(request: Request, req_id: str):
+        try:
+            workflow.approve_merge(req_id)
+        except Exception as exc:
+            return templates.TemplateResponse(request, "request_run_error.html", {"req_id": req_id, "reason": str(exc), "req": requests.get(req_id)}, status_code=422)
+        return RedirectResponse(f"/requests/{req_id}", status_code=303)
+
+    @app.post("/requests/{req_id}/changes")
+    async def request_changes(request: Request, req_id: str, note: str = Form("")):
+        try:
+            workflow.request_changes(req_id, note)
+        except Exception as exc:
+            return templates.TemplateResponse(request, "request_run_error.html", {"req_id": req_id, "reason": str(exc), "req": requests.get(req_id)}, status_code=422)
+        return RedirectResponse(f"/requests/{req_id}", status_code=303)
+
+    @app.post("/requests/{req_id}/prod")
+    async def request_prod(request: Request, req_id: str):
+        try:
+            workflow.approve_prod(req_id)
+        except Exception as exc:
+            return templates.TemplateResponse(request, "request_run_error.html", {"req_id": req_id, "reason": str(exc), "req": requests.get(req_id)}, status_code=422)
         return RedirectResponse(f"/requests/{req_id}", status_code=303)
 
     return app

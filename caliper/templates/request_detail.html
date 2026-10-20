@@ -9,7 +9,10 @@
 {{ stepper(req.status) }}
 
 {% if req.status == 'failed' %}
-<div class="alert danger">Review failed 3 times. The workflow stopped and needs your call: edit the plan by hand or reject the request.</div>
+<div class="alert danger">Review failed {{ req.loop_count + 1 }} times. The workflow stopped and needs your call: edit the plan by hand or reject the request.</div>
+{% endif %}
+{% if req.review_note %}
+<div class="note">Human feedback: {{ req.review_note }}</div>
 {% endif %}
 
 <div class="card request-body">
@@ -59,11 +62,32 @@
 
 <div class="form-actions">
   {% if req.status == 'submitted' %}
-  <form method="post" action="/requests/{{ req.id }}/run">
-    <button class="btn primary" type="submit">Run workflow</button>
+  <form method="post" action="/requests/{{ req.id }}/run"><button class="btn primary" type="submit">Run workflow</button></form>
+  {% elif req.status == 'awaiting_approval' %}
+  <form method="post" action="/requests/{{ req.id }}/approve">
+    <button class="btn primary" type="submit">Approve &amp; merge</button>
   </form>
+  <form method="post" action="/requests/{{ req.id }}/changes" class="inline-form">
+    <div class="field">
+      <input type="text" name="note" placeholder="What should change?">
+    </div>
+    <button class="btn secondary" type="submit">Request changes</button>
+  </form>
+  {% elif req.status == 'deployed_dev' %}
+  <details class="confirm-dialog">
+    <summary class="btn danger">Deploy to Prod</summary>
+    <div class="card confirm-body">
+      <p>This runs <span class="mono">{{ 'prod' }}</span> deploy for request <span class="mono">{{ req.id }}</span>. This is the final production gate.</p>
+      <form method="post" action="/requests/{{ req.id }}/prod">
+        <button class="btn danger" type="submit">Yes, deploy to Prod</button>
+        <a class="btn ghost" href="/requests/{{ req.id }}">Cancel</a>
+      </form>
+    </div>
+  </details>
   {% elif req.status == 'failed' %}
-  <span class="muted">Re-running requires dropping state (not yet supported).</span>
+  <span class="muted">This request is stopped. Ask the human to decide (edit plan by hand or reject).</span>
+  {% elif req.status == 'live' %}
+  <span class="muted">Merged and deployed to Prod. Nothing left to do.</span>
   {% endif %}
 </div>
 {% endblock %}
