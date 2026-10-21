@@ -147,7 +147,8 @@ request intake, planning/execution/review, review loop with a 3-attempt limit, h
 gate -> merge -> Dev -> second gate -> Prod, project docs (manifest/graph/decisions) read from
 the repository and included in model prompts, safe project deletion, and SSE request updates.
 Providers verified against the installed services on this machine: Ollama (OpenAI-compatible
-HTTP) and OpenCode (`opencode run --format json`).
+HTTP) and OpenCode (`opencode run --format json`). Patch-safety primitives (validation, safe
+git-apply, per-request worktrees) are in place and tested but not yet wired into the
+Execution step (docs/DECISIONS.md D-031).
 Mock adapters exist only under `tests/`. Real SSH/docker deploy and real Git branch/merge are
-still deferred (see docs/DECISIONS.md, D-017); repository-aware patch application is the next
-tracked task (D-017/D-029 paper trail).
+still deferred (see docs/DECISIONS.md, D-017).

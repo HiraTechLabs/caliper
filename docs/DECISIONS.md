@@ -37,6 +37,7 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-028 | 2026-10-21 | models.yaml gains a per-role `provider` (`http` default, `opencode`) plus `timeout` | (this) |
 | D-029 | 2026-10-21 | OpenCode is integrated through `opencode run --format json` behind OpenCodeClient | (this) |
 | D-030 | 2026-10-21 | Role distinctness stays on the model id; the provider is a transport only | (this) |
+| D-031 | 2026-10-21 | Patch-safety primitives (validate + git apply + per-request worktree); runtime wiring deferred | (this) |
 
 ## Entries
 
@@ -401,3 +402,28 @@ Format: id, date, decision, reason, alternatives rejected.
   registry that does not exist.
 - **Alternatives rejected:** `(provider, model)` identity (allows the blind-spot repetition the
   rule exists to prevent); comparing normalized base names (guesswork across naming schemes).
+
+### D-031 - Patch-safety primitives exist; runtime wiring into Execution is the next task
+- **Decision:** `caliper/patch_safety.py` provides the tested primitives for real
+  repository-aware execution, and nothing more for now. `validate_patch` statically rejects
+  empty, malformed (no ---/+++ headers), overlarge (>2M chars) and binary patches, absolute
+  paths, backslash paths, and any `..`-containing path (path traversal). `apply_patch` runs
+  `git apply --check` (dry run) first, then `git apply`, via an argv array with a bounded
+  timeout and the patch on stdin — only inside a directory that is a git working copy or
+  worktree. `create_worktree`/`remove_worktree` isolate one request on the branch
+  `caliper/<request id>` cut from the clone's HEAD (branch names are validated), never touching
+  the default branch. `remote._run` gained optional `timeout` and `input_text` (backwards
+  compatible).
+- **Reason:** Goal B of the increment demands safe execution before touching a project
+  checkout, but the full loop (execution adapter writing into a per-request worktree, running
+  the project's tests there, feeding the reviewer the real diff) needs more design than one
+  increment should carry unreviewed. The primitives are complete, verified against real git
+  repositories, and honest about what they do not yet do: the EntryModel still returns a diff
+  as text and the workflow still only stores it — no runtime behavior changed.
+- **Next tracked task:** wire `create_worktree` + `apply_patch` into the workflow's executing
+  step and pass test results into the review; only after that is verified may Caliper work on
+  its own repository (goal C).
+- **Alternatives rejected:** wiring everything now with half-verified worktree/test/merge
+  behavior inside the workflow (fake completeness); relying on the model to produce safe paths
+  without validation (the model cannot be trusted with the filesystem); `git apply --unsafe-paths`
+  or shell execution (never).
