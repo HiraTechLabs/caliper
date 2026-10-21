@@ -25,16 +25,31 @@ nodes:
     path: caliper/http_models.py
     kind: domain
     description: >
-      OpenAI-compatible HTTP role adapters (chat/completions) with test-injectable
-      transport: planner must cite rule IDs, executor returns fenced diff,
-      reviewer must return per-rule JSON verdicts. Disabled by default.
+      Role adapters (planning/execution/review classes) over a chat client with a
+      post() method; roles are provider-agnostic. The default client is the
+      OpenAI-compatible HTTP ChatClient with test-injectable transport (this is
+      how a local Ollama is reached). The planner must cite rule IDs, the
+      executor returns a fenced diff, the reviewer must return per-rule JSON
+      verdicts. Disabled by default.
+  - id: opencode-adapter
+    path: caliper/opencode_models.py
+    kind: domain
+    description: >
+      OpenCode CLI client, a post()-compatible stand-in for ChatClient: runs
+      `opencode run --format json --model <provider/model>` as an argv array
+      (never a shell string), bounded timeout, secret-token redaction in error
+      output, plain-language failures for a missing executable, nonzero exit,
+      timeout and empty/malformed output. --auto is never passed; OpenCode keeps
+      its own credentials outside Caliper.
   - id: models-config
     path: caliper/models_config.py
     kind: domain
     description: >
-      Loads/validates models.yaml (three roles, base_url + model, keys under
-      CALIPER_SECRETS_DIR) and enforces three DISTINCT model ids at startup.
-      Blank roles block workflow runs; the factory builds HTTP role adapters.
+      Loads/validates models.yaml (three roles, provider http|opencode, base_url,
+      model, timeout, keys under CALIPER_SECRETS_DIR) and enforces three DISTINCT
+      model ids at startup — the model id is the identity; the provider is only a
+      transport. Blank roles block workflow runs; the factory builds HTTP role
+      adapters backed by the ChatClient or the OpenCodeClient per role provider.
   - id: deploy-adapter
     path: caliper/workflow.py
     kind: domain
@@ -132,10 +147,13 @@ nodes:
     path: tests/
     kind: test-suite
     description: >
-      pytest suite (130 passing, 1 skipped on Windows) covering: scaffold smoke,
+      pytest suite (154 passing) covering: scaffold smoke,
       registry, request state store, request UI flows, workflow engine (success path,
       review loop exhaustion, validation), workflow UI (run/approve gates),
-      models.yaml validation, HTTP adapters with fake transport, dashboard/global
+      models.yaml validation incl. per-role providers and (provider, model)-aware
+      config, HTTP adapters with fake transport, the OpenCode CLI adapter (argv
+      construction without a shell, timeout, nonzero exit, missing binary,
+      empty/malformed/redacted output), dashboard/global
       composer/status snapshot, repository access (deploy key, read/write probe),
       the principles/environments API (states, approval rules, Git round trip
       against a local repository, SSH key and ssh-copy-id command, host key pinning
@@ -174,6 +192,12 @@ edges:
   - from: models-config
     to: http-model-adapters
     relation: builds-when-configured
+  - from: models-config
+    to: opencode-adapter
+    relation: builds-for-roles-with-provider-opencode
+  - from: workflow-engine
+    to: opencode-adapter
+    relation: role-calls-when-configured-through
   - from: workflow-engine
     to: deploy-adapter
     relation: deploys-through
@@ -240,6 +264,9 @@ edges:
   - from: tests
     to: http-model-adapters
     relation: tests-with-fake-transport
+  - from: tests
+    to: opencode-adapter
+    relation: tests-with-stub-executable-and-json-lines-runner
   - from: tests
     to: principles
     relation: tests

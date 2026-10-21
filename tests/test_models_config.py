@@ -1,7 +1,13 @@
 import pytest
 import yaml
 
-from caliper.models_config import ModelsConfigError, ModelsNotConfigured, ModelsSettings, ROLE_ORDER
+from caliper.models_config import (
+    ROLE_ORDER,
+    ModelsConfigError,
+    ModelsNotConfigured,
+    ModelsSettings,
+    probe_role,
+)
 
 
 def _settings(tmp_path):
@@ -57,3 +63,106 @@ def test_saved_config_builds_three_distinct_http_adapters(tmp_path):
     adapters = settings.make_adapters()
     assert set(adapters) == set(ROLE_ORDER)
     assert len({adapter.__class__ for adapter in adapters.values()}) == 3
+
+
+def test_provider_defaults_to_http_and_is_persisted(tmp_path):
+    settings = _settings(tmp_path)
+    config = settings.save(_entries())
+    assert all(config[role]["provider"] == "http" for role in ROLE_ORDER)
+    stored = yaml.safe_load(settings.path.read_text(encoding="utf-8"))
+    assert stored["planning"]["provider"] == "http"
+    assert settings.configured() is True
+
+
+def test_unknown_provider_is_rejected(tmp_path):
+    settings = _settings(tmp_path)
+    entries = _entries()
+    entries["planning"]["provider"] = "warp"
+    with pytest.raises(ModelsConfigError, match="provider must be one of http, opencode"):
+        settings.save(entries)
+
+
+def test_opencode_role_needs_a_provider_slash_model_id(tmp_path):
+    settings = _settings(tmp_path)
+    entries = _entries()
+    entries["planning"].update({"provider": "opencode", "base_url": ""})
+    entries["planning"]["model"] = "glm-free-no-slash"
+    with pytest.raises(ModelsConfigError, match="provider/model"):
+        settings.save(entries)
+
+
+def test_opencode_role_rejects_a_base_url(tmp_path):
+    settings = _settings(tmp_path)
+    entries = _entries()
+    entries["planning"].update({"provider": "opencode", "model": "opencode/glm-5.3-flash-free"})
+    with pytest.raises(ModelsConfigError, match="does not use a base URL"):
+        settings.save(entries)
+
+
+def test_opencode_role_needs_no_base_url_to_be_configured(tmp_path):
+    settings = _settings(tmp_path)
+    entries = _entries()
+    entries["planning"].update({"provider": "opencode", "base_url": ""})
+    entries["planning"]["model"] = "opencode/glm-5.3-flash-free"
+    config = settings.save(entries)
+    assert settings.configured() is True
+    assert settings.missing_roles() == []
+    assert config["planning"]["base_url"] == ""
+
+
+def test_opencode_role_builds_an_opencode_backed_adapter(tmp_path):
+    settings = _settings(tmp_path)
+    entries = _entries()
+    entries["execution"].update({"provider": "opencode", "base_url": ""})
+    entries["execution"]["model"] = "opencode/glm-5.3-flash-free"
+    settings.save(entries)
+    adapters = settings.make_adapters()
+    assert type(adapters["execution"].client).__name__ == "OpenCodeClient"
+    assert adapters["execution"].client.model == "opencode/glm-5.3-flash-free"
+
+
+def test_timeout_is_validated_and_stored(tmp_path):
+    settings = _settings(tmp_path)
+    entries = _entries()
+    entries["review"]["timeout"] = 120
+    config = settings.save(entries)
+    assert config["review"]["timeout"] == 120
+    entries["review"]["timeout"] = -5
+    with pytest.raises(ModelsConfigError, match="positive"):
+        settings.save(entries)
+    entries["review"]["timeout"] = "later"
+    with pytest.raises(ModelsConfigError, match="number of seconds"):
+        settings.save(entries)
+
+
+def test_the_model_id_is_the_identity_across_providers(tmp_path):
+    settings = _settings(tmp_path)
+    entries = _entries(planning="opencode/same-model", execution="opencode/same-model")
+    for role in ("planning", "execution"):
+        entries[role].update({"provider": "opencode", "base_url": ""})
+    with pytest.raises(ModelsConfigError, match="DIFFERENT"):
+        settings.save(entries)
+
+
+def test_probe_role_sends_the_ok_prompt_over_opencode():
+    stored = []
+
+    def runner(client, content):
+        stored.append((client.model, content))
+        return '{"type":"text","part":{"type":"text","text":"OK"}}'
+
+    reply = probe_role("review", "", "opencode/glm-5.3-flash-free", provider="opencode", runner=runner)
+    assert reply == "OK"
+    assert stored[0][0] == "opencode/glm-5.3-flash-free"
+
+
+def test_probe_role_rejects_opencode_without_a_model():
+    with pytest.raises(ModelsConfigError, match="required before testing"):
+        probe_role("review", "", "", provider="opencode")
+
+
+def test_probe_role_http_path_is_unchanged():
+    with pytest.raises(ModelsConfigError, match="required before testing"):
+        probe_role("review", "", "", provider="http")
+    with pytest.raises(ModelsConfigError, match="required before testing"):
+        probe_role("review", "http://x/v1", "", provider="http")

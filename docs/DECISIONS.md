@@ -34,6 +34,9 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-025 | 2026-10-20 | A finished request can be deleted with its artifacts; in-flight requests are protected | (this) |
 | D-026 | 2026-10-20 | Project decisions, graph and manifest live in `.caliper/` in the project repository | (this) |
 | D-027 | 2026-10-21 | Decisions can be authored from the project Docs section | (this) |
+| D-028 | 2026-10-21 | models.yaml gains a per-role `provider` (`http` default, `opencode`) plus `timeout` | (this) |
+| D-029 | 2026-10-21 | OpenCode is integrated through `opencode run --format json` behind OpenCodeClient | (this) |
+| D-030 | 2026-10-21 | Role distinctness stays on the model id; the provider is a transport only | (this) |
 
 ## Entries
 
@@ -348,3 +351,53 @@ Format: id, date, decision, reason, alternatives rejected.
 - **Alternatives rejected:** editing decisions in place (destroys history); letting a model write
   decisions without human action (not human-authored); requiring a Git client (breaks the
   single-screen workflow); adding a separate Decisions page (more navigation for one small form).
+
+### D-028 - models.yaml gains a per-role provider field; HTTP stays the default
+- **Decision:** Each role may declare `provider: http | opencode` (blank means `http`, so every
+  existing models.yaml still loads unchanged), an optional `timeout` in seconds (default 600) and,
+  for OpenCode roles, an optional `executable` (default `opencode`). An `http` role needs base_url
+  and model together (unchanged); an `opencode` role needs only a model id in `provider/model`
+  form — a base URL is rejected with `does not use a base URL`. `normalize_settings`, `status`,
+  `configured`, `missing_roles`, `save` and the adapter factory are provider-aware; Settings >
+  Models shows a provider select, hides the base URL/API-key fields for OpenCode roles and keeps
+  the Test button working for both paths (probe per provider).
+- **Reason:** The OpenAI-compatible HTTP path fits a local Ollama as-is (verified: Ollama 0.40.6
+  on 127.0.0.1:11434/v1), but OpenCode does not expose such an endpoint, so its roles must carry a
+  different provider type instead of being crammed into base_url. Keeping `http` implicit
+  preserves backwards compatibility with every shipped models.yaml.
+- **Alternatives rejected:** a second `opencode_*` mixin on the same role (hidden routing rules,
+  hard to validate); mandating `provider:` in every entry (breaks existing files for no gain);
+  storing the OpenCode executable path in code (machines differ).
+
+### D-029 - OpenCode runs one prompt at a time through `opencode run --format json`
+- **Decision:** `caliper/opencode_models.py` adds `OpenCodeClient`, a `post()`-compatible stand-in
+  for `ChatClient` that runs `opencode run --format json --model <provider/model> <prompt>`.
+- **Reason:** The installed OpenCode (v2.1.2) has no OpenAI-compatible `/chat/completions`
+  endpoint, but `run --format json` is a documented machine-readable mode: one JSON object per
+  line, the answer in `type: "text"` parts. The prompt is one argv element (no shell anywhere),
+  the timeout is bounded, `--auto` is never passed (a headless role must not be able to approve
+  its own tool actions), error output passes through token redaction, and failures for a missing
+  executable, nonzero exit, timeout, and empty or malformed output are plain-language errors.
+  OpenCode keeps its own credentials and its own model list (`opencode models`); Caliper stores
+  and hardcodes neither. Real smoke tests passed against the installed CLI: `OK` from
+  `opencode/glm-5.3-flash-free`, a clear failure for a nonexistent model id, and `OK` from Ollama
+  `minimax-m3.1-flash:cloud` through the plain HTTP path. A local smoke command exists:
+  `python -m caliper.smoke planning|execution|review [--timeout N]`.
+- **Alternatives rejected:** assuming an OpenAI-compatible OpenCode endpoint (it does not exist);
+  parsing the human-oriented default output (brittle); `--auto` (unattended privilege escalation);
+  routing OpenCode through the HTTP adapter (no compatible endpoint); a long-running `opencode
+  serve` integration (process lifecycle management this increment does not need).
+
+### D-030 - Role distinctness stays on the model id; the provider is a transport
+- **Decision:** The three-roles-distinctness check continues to compare model ids only, across
+  all providers.
+- **Reason:** AGENTS.md 3 requires three different models so that no part repeats its own blind
+  spots. What is duplicated is the *model*, not the transport: the same model id reached through
+  HTTP and through OpenCode is still one reviewer. Comparing `(provider, model)` would have let
+  the same model serve two roles through two backends and weakened the rule. Known limitation,
+  accepted and documented: one concrete model exposed with different id strings by different
+  transports (for example Ollama's `minimax-m3.1-flash:cloud` directly versus
+  `ollama/minimax-m3.1-flash:cloud` through OpenCode) cannot be caught without a shared model
+  registry that does not exist.
+- **Alternatives rejected:** `(provider, model)` identity (allows the blind-spot repetition the
+  rule exists to prevent); comparing normalized base names (guesswork across naming schemes).
