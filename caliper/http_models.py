@@ -60,6 +60,21 @@ def _extract_json(text: str) -> dict:
         raise WorkflowError(f"Review model returned unparseable JSON: {exc}")
 
 
+def _docs_block(project: dict) -> str:
+    docs = project.get("project_docs") or {}
+    graph = docs.get("graph_text") or ""
+    decisions = docs.get("decisions") or []
+    parts = []
+    if graph:
+        parts.append("Project graph:\n" + graph)
+    if decisions:
+        parts.append(
+            "Project decisions:\n"
+            + "\n\n".join(f"### {item['name']}\n{item['content']}" for item in decisions[:20])
+        )
+    return ("\n" + "\n\n".join(parts) + "\n") if parts else ""
+
+
 class HTTPPlanningModel:
     def __init__(self, client: ChatClient):
         self.client = client
@@ -68,7 +83,8 @@ class HTTPPlanningModel:
         prompt = (
             "You are the Planning Model of a private software factory.\n"
             f"Project: {project['id']}\n"
-            f"Request type: {req['kind']}\nRequest text: {req['text']}\n"
+            + _docs_block(project)
+            + f"Request type: {req['kind']}\nRequest text: {req['text']}\n"
             + (f"Error/log attached:\n{req['extra']}\n" if req.get("extra") else "")
             + "Write a short, concrete implementation plan in markdown.\n"
             "Include a section '## Rules relied on' listing every principle rule you rely on.\n"
@@ -88,7 +104,9 @@ class HTTPExecutionModel:
     def execute(self, req: dict, project: dict, plan: str) -> str:
         prompt = (
             "You are the Execution Model. Produce code changes for the project on a branch.\n"
-            f"Project: {project['id']}\nRequest: {req['text']}\nPlan:\n{plan}\n"
+            f"Project: {project['id']}\n"
+            + _docs_block(project)
+            + f"Request: {req['text']}\nPlan:\n{plan}\n"
             "Return ONLY a unified diff (one or more files). No prose outside the diff."
         )
         return _extract_code_block(self.client.post(prompt))
@@ -101,7 +119,8 @@ class HTTPReviewModel:
     def review(self, req: dict, project: dict, plan: str, diff: str, rule_ids: list[str]) -> dict:
         prompt = (
             "You are the Review Model. Judge the proposed change against each rule, one by one.\n"
-            f"Request: {req['text']}\n\nPlan:\n{plan}\n\nDiff:\n{diff}\n\n"
+            + _docs_block(project)
+            + f"Request: {req['text']}\n\nPlan:\n{plan}\n\nDiff:\n{diff}\n\n"
             "Rules to judge: " + ", ".join(rule_ids) + "\n"
             "Reply with ONLY a JSON object: {\"verdicts\": {\"<rule-id>\": {\"status\": \"pass\"|\"fail\", \"reason\": \"...\"}}}."
         )

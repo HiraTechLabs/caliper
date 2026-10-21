@@ -117,6 +117,31 @@ class GitRepo:
             )
         return self.head_commit()
 
+    def write_many(self, files: dict[str, str], message: str) -> str:
+        """Write several files in one commit and push them to the default branch."""
+        if not files:
+            return self.head_commit()
+        for relative, content in files.items():
+            path = self._resolve(relative)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        code, output = self._git(["add", "--", *files.keys()])
+        if code != 0:
+            raise RepoError(f"Cannot stage the project docs: {output or 'git add failed'}")
+        code, output = self._git([*GIT_IDENTITY, "commit", "-m", message])
+        if code != 0:
+            if "nothing to commit" in output.lower():
+                return self.head_commit()
+            raise RepoError(f"Cannot commit the project docs: {output or 'git commit failed'}")
+        branch = self.default_branch()
+        code, output = self._git(["push", "origin", f"HEAD:refs/heads/{branch}"])
+        if code != 0:
+            raise RepoError(
+                f"Cannot push to {branch}: {output or 'git push failed'}. "
+                "Pull the latest changes and try again."
+            )
+        return self.head_commit()
+
     def _resolve(self, relative: str) -> Path:
         if relative.startswith("/") or ".." in Path(relative).parts:
             raise RepoError("Repository paths must be relative and inside the repository.")

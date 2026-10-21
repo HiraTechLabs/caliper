@@ -5,6 +5,7 @@ import threading
 
 VALID_KINDS = ("feature", "bugfix")
 ACTIVE_STATUSES = ("submitted", "planning", "executing", "reviewing", "awaiting_approval", "merged", "deployed_dev")
+IN_FLIGHT_STATUSES = ("planning", "executing", "reviewing")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -137,6 +138,17 @@ class RequestStore:
             req = self.get(row["id"])
             if req is not None:
                 self._notify("updated", req)
+
+    def delete(self, req_id: str) -> dict | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM requests WHERE id = ?", (req_id,)).fetchone()
+            if row is None:
+                return None
+            self._conn.execute("DELETE FROM requests WHERE id = ?", (req_id,))
+            self._conn.commit()
+        req = dict(row)
+        self._notify("deleted", req)
+        return req
 
     def delete_project_with_audit(self, project_id: str, project_name: str, details: dict) -> int:
         now = _now()

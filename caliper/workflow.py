@@ -30,7 +30,8 @@ def failed_rules(review: dict) -> list[str]:
 
 
 class Workflow:
-    def __init__(self, requests, registry, artifacts_root: Path, planning=None, execution=None, review=None, deploy=None):
+    def __init__(self, requests, registry, artifacts_root: Path, planning=None, execution=None,
+                 review=None, deploy=None, docs=None):
         self.requests = requests
         self.registry = registry
         self.artifacts_root = Path(artifacts_root)
@@ -38,6 +39,7 @@ class Workflow:
         self.execution = execution
         self.review = review
         self.deploy = deploy or MockDeployAdapter()
+        self.docs = docs
 
     def missing_models(self) -> list[str]:
         labels = {"planning": "Planning", "execution": "Execution", "review": "Review"}
@@ -69,6 +71,9 @@ class Workflow:
                 "The project has no approved principle rules. Approve the principles first."
             )
         project = self.registry.get_project(req["project_id"])
+        project["project_docs"] = (
+            self.docs.read_cached(req["project_id"]) if self.docs is not None else {}
+        )
         dir = self.artifact_dir(req_id)
         dir.mkdir(parents=True, exist_ok=True)
 

@@ -2,7 +2,9 @@ import asyncio
 import json
 import os
 import queue
+import shutil
 from pathlib import Path
+from urllib.parse import quote
 
 import uvicorn
 from fastapi import FastAPI, Form, Request
@@ -13,15 +15,21 @@ from fastapi.templating import Jinja2Templates
 from caliper.deletion import ProjectDeleteError, ProjectDeleter
 from caliper.events import EventBus
 from caliper.principles import PrinciplesError, PrinciplesService
+from caliper.project_docs import ProjectDocsError, ProjectDocsService
 from caliper.models_config import ROLE_ORDER, ModelsConfigError, ModelsSettings, probe_role
 from caliper.registry import ENVIRONMENT_ORDER, ProjectError, ProjectRegistry
-from caliper.state import ACTIVE_STATUSES, VALID_KINDS, RequestStore
+from caliper.state import ACTIVE_STATUSES, IN_FLIGHT_STATUSES, VALID_KINDS, RequestStore
 
 BASE_DIR = Path(__file__).resolve().parent
 
 
+class RequestDeleteError(Exception):
+    pass
+
+
 def create_app(registry: ProjectRegistry | None = None, requests: RequestStore | None = None,
                workflow=None, principles: PrinciplesService | None = None,
+               project_docs: ProjectDocsService | None = None,
                models_settings: ModelsSettings | None = None, probe=None,
                project_deleter: ProjectDeleter | None = None) -> FastAPI:
     if registry is None:
@@ -35,6 +43,8 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
         requests = RequestStore(db_path)
     if principles is None:
         principles = PrinciplesService(registry)
+    if project_docs is None:
+        project_docs = ProjectDocsService(registry)
     bus = EventBus()
     requests.on_change = lambda change, req: bus.publish({"change": change, "id": req["id"], "request": req})
     if project_deleter is None:
@@ -50,8 +60,12 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
     def build_workflow():
         if settings.configured():
             adapters = settings.make_adapters()
-            return Workflow(requests, registry, artifacts_root, planning=adapters["planning"], execution=adapters["execution"], review=adapters["review"])
-        return Workflow(requests, registry, artifacts_root)
+            return Workflow(
+                requests, registry, artifacts_root,
+                planning=adapters["planning"], execution=adapters["execution"],
+                review=adapters["review"], docs=project_docs,
+            )
+        return Workflow(requests, registry, artifacts_root, docs=project_docs)
 
     if workflow is None:
         workflow = build_workflow()
@@ -103,6 +117,25 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
                 path = artifact_dir / name
                 entry[key] = path.read_text(encoding="utf-8") if path.is_file() else None
         return entry
+
+    def _delete_request(req: dict) -> dict:
+        if req["status"] in IN_FLIGHT_STATUSES:
+            raise RequestDeleteError(
+                f"Request {req['id']} is {req['status']}. Wait for it to stop before deleting it."
+            )
+        raw = workflow.artifact_dir(req["id"])
+        if raw.is_symlink():
+            raise RequestDeleteError("Refusing to delete: the request artifact directory is a symlink.")
+        base = Path(workflow.artifacts_root).resolve()
+        expected = (base / req["project_id"] / req["id"]).resolve()
+        if raw.resolve() != expected:
+            raise RequestDeleteError("Refusing to delete: the request artifact path is outside the project.")
+        if raw.exists():
+            shutil.rmtree(raw)
+        deleted = requests.delete(req["id"])
+        if deleted is None:
+            raise RequestDeleteError(f"Request {req['id']!r} does not exist.")
+        return deleted
 
     def _state_payload(request_id: str | None = None, override: dict | None = None) -> dict:
         if request_id:
@@ -261,6 +294,7 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             artifacts.pop("review")
         return templates.TemplateResponse(request, "request_detail.html", _ui_ctx(
             req=req, artifacts=artifacts, failed=failed, passed=passed, verdicts=verdicts,
+            delete_error=request.query_params.get("delete_error"),
         ))
 
     @app.post("/requests/{req_id}/run")
@@ -294,6 +328,28 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
         except Exception as exc:
             return templates.TemplateResponse(request, "request_run_error.html", _ui_ctx(req_id=req_id, reason=str(exc)), status_code=422)
         return RedirectResponse(f"/requests/{req_id}", status_code=303)
+
+    @app.post("/requests/{req_id}/delete")
+    async def request_delete_form(request: Request, req_id: str):
+        req = requests.get(req_id)
+        if req is None:
+            return templates.TemplateResponse(request, "request_missing.html", _ui_ctx(req_id=req_id), status_code=404)
+        try:
+            _delete_request(req)
+        except RequestDeleteError as exc:
+            return RedirectResponse(f"/requests/{req_id}?delete_error={quote(str(exc))}", status_code=303)
+        return RedirectResponse(f"/projects/{req['project_id']}#requests", status_code=303)
+
+    @app.delete("/api/requests/{req_id}")
+    async def request_delete_api(req_id: str):
+        req = requests.get(req_id)
+        if req is None:
+            return JSONResponse({"error": f"Request '{req_id}' does not exist."}, status_code=404)
+        try:
+            _delete_request(req)
+        except RequestDeleteError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        return {"deleted": True, "id": req_id, "project_id": req["project_id"]}
 
     @app.get("/api/events")
     async def state_events(request: Request):
@@ -347,6 +403,7 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
         except ProjectError:
             return templates.TemplateResponse(request, "project_missing.html", _ui_ctx(project_id=project_id), status_code=404)
         setup = registry.setup_status(manifest)
+        docs = project_docs.read_cached(project_id)
         project_requests = requests.list_for_project(project_id)
         stop_ready = {
             env: all(manifest["environments"][env].get(key) for key in (
@@ -366,6 +423,9 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
                 setup_missing=[item["label"] for item in setup if not item["ready"]],
                 setup_ready=all(item["ready"] for item in setup),
                 setup_error=error,
+                docs=docs,
+                docs_error=request.query_params.get("docs_error"),
+                docs_message=request.query_params.get("docs_message"),
                 stop_ready=stop_ready,
             ),
             status_code=status_code,
@@ -572,6 +632,116 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             return JSONResponse({"error": str(exc)}, status_code=422)
         except ProjectError as exc:
             return JSONResponse({"error": str(exc)}, status_code=404)
+
+    # --- Project docs (AGENTS.md 7b) ------------------------------------------------
+
+    @app.get("/api/projects/{project_id}/docs")
+    async def project_docs_read(project_id: str):
+        try:
+            return project_docs.read_cached(project_id)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/api/projects/{project_id}/docs/sync")
+    async def project_docs_sync(project_id: str):
+        try:
+            return project_docs.sync(project_id)
+        except ProjectDocsError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/api/projects/{project_id}/docs/init")
+    async def project_docs_init(project_id: str):
+        try:
+            return project_docs.ensure_scaffold(project_id)
+        except ProjectDocsError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/api/projects/{project_id}/decisions")
+    async def project_decision_create(request: Request, project_id: str):
+        body = await request.body()
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return JSONResponse(
+                {"error": "The request body must be JSON with title, decision and reason."},
+                status_code=400,
+            )
+        if not isinstance(data, dict):
+            return JSONResponse({"error": "The request body must be a JSON object."}, status_code=400)
+        values = {}
+        for field in ("title", "decision", "reason", "alternatives"):
+            value = data.get(field, "")
+            if not isinstance(value, str):
+                return JSONResponse({"error": f"'{field}' must be a string."}, status_code=400)
+            values[field] = value
+        try:
+            return project_docs.append_decision(
+                project_id,
+                title=values["title"],
+                decision=values["decision"],
+                reason=values["reason"],
+                alternatives=values["alternatives"],
+            )
+        except ProjectDocsError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/projects/{project_id}/docs/sync")
+    async def project_docs_sync_form(request: Request, project_id: str):
+        try:
+            project_docs.sync(project_id)
+        except (ProjectDocsError, ProjectError) as exc:
+            return RedirectResponse(
+                f"/projects/{project_id}?docs_error={quote(str(exc))}#docs", status_code=303
+            )
+        message = "Project docs synced from the repository."
+        return RedirectResponse(
+            f"/projects/{project_id}?docs_message={quote(message)}#docs", status_code=303
+        )
+
+    @app.post("/projects/{project_id}/docs/init")
+    async def project_docs_init_form(request: Request, project_id: str):
+        try:
+            result = project_docs.ensure_scaffold(project_id)
+        except (ProjectDocsError, ProjectError) as exc:
+            return RedirectResponse(
+                f"/projects/{project_id}?docs_error={quote(str(exc))}#docs", status_code=303
+            )
+        message = (
+            "Created the missing project docs in the repository."
+            if result.get("initialized")
+            else "Project docs already exist; nothing was written."
+        )
+        return RedirectResponse(
+            f"/projects/{project_id}?docs_message={quote(message)}#docs", status_code=303
+        )
+
+    @app.post("/projects/{project_id}/decisions")
+    async def project_decision_form(
+        request: Request,
+        project_id: str,
+        title: str = Form(""),
+        decision: str = Form(""),
+        reason: str = Form(""),
+        alternatives: str = Form(""),
+    ):
+        try:
+            result = project_docs.append_decision(
+                project_id, title=title, decision=decision, reason=reason, alternatives=alternatives
+            )
+        except (ProjectDocsError, ProjectError) as exc:
+            return RedirectResponse(
+                f"/projects/{project_id}?docs_error={quote(str(exc))}#docs", status_code=303
+            )
+        message = f"Added {result['written']}."
+        return RedirectResponse(
+            f"/projects/{project_id}?docs_message={quote(message)}#docs", status_code=303
+        )
 
     # --- Environments (AGENTS.md 12.5 / 12.8) ---------------------------------------
 

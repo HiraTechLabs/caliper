@@ -99,12 +99,13 @@ a:hover { text-decoration: underline; }
 .field { display: flex; flex-direction: column; gap: 4px; border: none; margin: 0; padding: 0; }
 .field legend { padding: 0; margin-bottom: 4px; }
 .field label, .field legend { font-size: 14px; font-weight: 500; }
-input[type="text"], select {
+input[type="text"], select, textarea {
   min-height: 36px; padding: 6px 10px;
   border: 1px solid var(--border); border-radius: 8px;
   background: var(--bg); color: var(--text); font-size: 14px;
   font-family: inherit;
 }
+textarea { resize: vertical; }
 .helper { color: var(--text-muted); font-size: 12px; }
 .segmented { display: flex; gap: 12px; }
 .segmented label {
@@ -171,6 +172,9 @@ textarea {
 .detail-section { margin-top: 32px; }
 .env-grid, .principles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
 .principle-card summary { cursor: pointer; font-weight: 500; }
+.decision-item { border-top: 1px solid var(--border); padding: 8px 0; }
+.decision-item:first-of-type { border-top: 0; }
+.decision-item summary { cursor: pointer; font-weight: 500; }
 .principle-content {
   margin: 12px 0 0; padding: 12px;
   background: var(--surface-2); border-radius: 8px;

@@ -110,7 +110,7 @@ One box. Nothing else required. After submit, go to the request page showing liv
 Failed rules first. "Request changes" opens one text box; the request returns to Execution with that note.
 
 ### 4.5 Project page
-Tabs-free single page: requests list, Principles (6 cards, editable), Decisions (timeline), Graph (rendered from graph.yaml), Environments (Dev/Prod status + last deploy).
+Tabs-free single page: requests list, Principles (6 cards, editable), Docs (manifest, Graph from graph.yaml, Decisions timeline, sync/init/add-decision actions), Environments (Dev/Prod status + last deploy).
 
 ## 5. Content rules
 - Sentence case. Verbs on buttons ("Approve & merge", not "OK").

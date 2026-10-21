@@ -31,6 +31,9 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-022 | 2026-10-20 | Model roles are blank by default; mock adapters live only under `tests/` | (this) |
 | D-023 | 2026-10-20 | Safe project deletion + SSE request updates replace `/status` polling | (this) |
 | D-024 | 2026-10-20 | Static asset URLs carry a version query; project settings/delete are a visible tab | (this) |
+| D-025 | 2026-10-20 | A finished request can be deleted with its artifacts; in-flight requests are protected | (this) |
+| D-026 | 2026-10-20 | Project decisions, graph and manifest live in `.caliper/` in the project repository | (this) |
+| D-027 | 2026-10-21 | Decisions can be authored from the project Docs section | (this) |
 
 ## Entries
 
@@ -301,3 +304,47 @@ Format: id, date, decision, reason, alternatives rejected.
 - **Alternatives rejected:** telling the human to hard-refresh after every deploy (easy to
   forget); renaming the bundle on every build (manual churn); putting delete only in a global
   menu (loses the project context and the request counts).
+
+### D-025 - A finished request can be deleted with its artifacts; in-flight requests are protected
+- **Decision:** `DELETE /api/requests/{id}` and `POST /requests/{id}/delete` remove one request
+  row and its `plan.md`/`diff.patch`/`review.json` directory. The request page shows a
+  `Danger zone` with an explicit confirmation. Requests in `planning`, `executing` or
+  `reviewing` are refused with a plain reason; finished, failed, submitted and awaiting-approval
+  requests can be deleted. Project deletion still removes all remaining history.
+- **Reason:** Old requests otherwise accumulate forever, and the human needs a narrow action
+  that is not "delete the whole project". Artifacts must disappear with the row so a later
+  request id cannot inherit stale files. A running workflow must not lose its row underneath it.
+- **Alternatives rejected:** deleting only the SQLite row (stale artifacts remain); allowing
+  deletion while executing (race with the workflow); a bulk "clear all" button (too easy to
+  destroy history by accident); reusing project deletion (removes keys and the project too).
+
+### D-026 - Project decisions, graph and manifest live in `.caliper/` in the project repository
+- **Decision:** `ProjectDocsService` reads and writes `.caliper/manifest.yaml`,
+  `.caliper/graph.yaml` and `.caliper/decisions/*.md` in the project's Git repository. The
+  project page shows all three and offers `Sync from repository` and `Create missing docs`.
+  `Create missing docs` only writes missing files and commits them; it never overwrites an
+  existing file. Decisions are append-only Markdown files. The graph and decisions are included
+  in the Planning, Execution and Review model prompts. The local
+  `projects/<id>/manifest.yaml` remains the runtime/secret store (deploy keys, environment
+  connection state, approval hashes) because it must exist before the repository is cloned.
+- **Reason:** AGENTS.md 7b makes the project repository the source of truth for project docs.
+  Keeping decisions and graph only in Caliper's own `docs/` meant projects did not carry their
+  own architecture or decision history, and models never saw either. A local clone cache keeps
+  page loads offline; an explicit sync is the only network read.
+- **Alternatives rejected:** reading the repository on every page load (slow, fails offline);
+  putting project docs only in SQLite (not versioned with the code); auto-overwriting graph or
+  decisions during sync (destroys human-authored content); putting secrets in the repository
+  manifest (leaks credentials); requiring a new setup-checklist item before requests (docs can
+  be initialized after the first sync).
+
+### D-027 - Decisions can be authored from the project Docs section
+- **Decision:** The project Docs section has an `Add decision` form and
+  `POST /api/projects/{id}/decisions`. It appends one Markdown file under
+  `.caliper/decisions/`, commits and pushes it to the default branch. Existing decision files are
+  never edited or deleted. Title, decision and reason are required; alternatives are optional.
+- **Reason:** `append_decision` existed only as an unused service method. Decisions are a core
+  project entity, and a human needs a direct path to record one without leaving Caliper or
+  hand-writing a filename. Keeping it append-only preserves the decision history.
+- **Alternatives rejected:** editing decisions in place (destroys history); letting a model write
+  decisions without human action (not human-authored); requiring a Git client (breaks the
+  single-screen workflow); adding a separate Decisions page (more navigation for one small form).

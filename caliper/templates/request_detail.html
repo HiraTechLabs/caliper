@@ -118,5 +118,32 @@
   <span class="muted">Merged and deployed to Prod. Nothing left to do.</span>
   {% endif %}
 </div>
+
+<section class="detail-section" id="delete-request">
+  <h2>Danger zone</h2>
+  {% if delete_error %}
+  <div class="alert danger" role="alert">{{ delete_error }}</div>
+  {% endif %}
+  <div class="card danger-zone">
+    <div>
+      <h3>Delete this request</h3>
+      <p class="muted">Removes the request and its plan, diff and review artifacts. This cannot be undone.</p>
+    </div>
+    {% if req.status in ['planning', 'executing', 'reviewing'] %}
+    <span class="muted">This request is {{ req.status }}. Wait for it to stop before deleting.</span>
+    {% else %}
+    <details class="confirm-dialog">
+      <summary class="btn danger">Delete request</summary>
+      <div class="card confirm-body">
+        <p>Delete <span class="mono">{{ req.id }}</span> and its artifacts? This cannot be undone.</p>
+        <form method="post" action="/requests/{{ req.id }}/delete">
+          <button class="btn danger" type="submit">Yes, delete request</button>
+          <a class="btn ghost" href="/requests/{{ req.id }}">Cancel</a>
+        </form>
+      </div>
+    </details>
+    {% endif %}
+  </div>
+</section>
 </div>
 {% endblock %}

@@ -39,6 +39,28 @@ def test_run_passes_to_awaiting_approval_and_writes_artifacts(env):
     assert "+Implements: Add refund endpoint" in (dir / "diff.patch").read_text()
 
 
+def test_run_attaches_the_project_docs_to_the_model_context(env):
+    _, requests, workflow = env
+
+    class CapturingPlanning(MockPlanningModel):
+        def plan(self, req, project, rule_ids):
+            self.project = project
+            return super().plan(req, project, rule_ids)
+
+    class FakeDocs:
+        def read_cached(self, project_id):
+            return {"graph_text": "nodes: []\n", "decisions": [{"name": "0001-x.md", "content": "# X\n"}]}
+
+    planning = CapturingPlanning()
+    workflow.planning = planning
+    workflow.docs = FakeDocs()
+    req = requests.create("shop-api", "feature", "Add refund endpoint")
+
+    workflow.run(req["id"])
+
+    assert planning.project["project_docs"]["graph_text"] == "nodes: []\n"
+
+
 def test_review_validates_per_rule_output(env):
     validate_review({"verdicts": {"SEC-001": {"status": "pass", "reason": "ok"}}})
     with pytest.raises(WorkflowError, match="verdicts"):

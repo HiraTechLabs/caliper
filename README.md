@@ -57,6 +57,22 @@ The project page shows a setup checklist: Repository access, Principles (6), Dev
 Prod environment. Requests stay disabled until all four are complete, and the button names the
 missing item.
 
+## Project docs (manifest, graph, decisions)
+
+Every project repository also carries its own docs under `.caliper/`:
+
+- `.caliper/manifest.yaml` — portable project metadata (id, name, product, repository URL)
+- `.caliper/graph.yaml` — project components (`nodes`) and relations (`edges`)
+- `.caliper/decisions/*.md` — append-only decision records
+
+The project page's **Docs** section reads these from the local clone and has three actions:
+**Sync from repository** (fetch the default branch and read again), **Create missing docs**
+(write only the missing files, commit and push; existing files are never overwritten) and
+**Add decision** (append one new Markdown decision, commit and push; old decisions are never
+edited). The graph and decisions are included in the Planning, Execution and Review prompts. The local
+`projects/<id>/manifest.yaml` remains Caliper's runtime/secret store (keys, connection state,
+approval hashes); it is not the portable project manifest.
+
 ## Models
 
 AI roles are disabled until Settings > Models has three distinct models (Planning, Execution,
@@ -70,6 +86,10 @@ active requests are cancelled, run history and local files/keys are removed, and
 event is kept. The GitHub repository and its `.caliper/` files are never deleted. Optional
 Dev/Prod stop runs before any deletion and aborts everything if it fails. After deletion,
 remove the deploy key from the GitHub repository settings yourself.
+
+A single finished request can be deleted from its **Danger zone** on the request page; this
+also removes its plan, diff and review artifacts. Requests that are planning, executing or
+reviewing are protected until they stop.
 
 ## Run tests (one command)
 
@@ -111,6 +131,7 @@ CI has exactly three jobs (to be wired as they become relevant):
 
 The workflow runs end-to-end with configured OpenAI-compatible models: project setup checklist,
 request intake, planning/execution/review, review loop with a 3-attempt limit, human approval
-gate -> merge -> Dev -> second gate -> Prod, safe project deletion, and SSE request updates.
+gate -> merge -> Dev -> second gate -> Prod, project docs (manifest/graph/decisions) read from
+the repository and included in model prompts, safe project deletion, and SSE request updates.
 Mock adapters exist only under `tests/`. Real SSH/docker deploy and real Git branch/merge are
 still deferred (see docs/DECISIONS.md, D-017).

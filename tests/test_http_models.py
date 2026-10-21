@@ -42,6 +42,37 @@ def test_http_review_parses_json_and_validates_per_rule():
         bad.review({"id": "r", "kind": "feature", "text": "t"}, {"id": "p"}, "plan", "diff", ["SEC-001"])
 
 
+def test_prompts_include_the_project_graph_and_decisions():
+    stored = []
+    project = {
+        "id": "p",
+        "project_docs": {
+            "graph_text": "nodes:\n  - id: api\n    path: src/api.py\nedges: []\n",
+            "decisions": [{"name": "0001-queue.md", "content": "# Use a queue\n"}],
+        },
+    }
+    req = {"id": "r", "kind": "feature", "text": "t"}
+    planner = HTTPPlanningModel(ChatClient(
+        "m", "http://x/v1", transport=_fake_transport(stored, "## Rules relied on\n- SEC-001: yes")
+    ))
+    planner.plan(req, project, ["SEC-001"])
+    executor = HTTPExecutionModel(ChatClient(
+        "m", "http://x/v1", transport=_fake_transport(stored, "--- a/f\n+++ b/f\n@@\n+x")
+    ))
+    executor.execute(req, project, "plan")
+    reviewer = HTTPReviewModel(ChatClient(
+        "m", "http://x/v1",
+        transport=_fake_transport(stored, '{"verdicts": {"SEC-001": {"status": "pass", "reason": "ok"}}}'),
+    ))
+    reviewer.review(req, project, "plan", "diff", ["SEC-001"])
+
+    for _, prompt in stored:
+        assert "Project graph:" in prompt
+        assert "id: api" in prompt
+        assert "Project decisions:" in prompt
+        assert "Use a queue" in prompt
+
+
 def test_factory_builds_http_adapters_and_honors_injected_transport():
     config = {
         role: {"base_url": f"http://127.0.0.1:{9000 + index}/v1", "model": f"m-{index}"}

@@ -28,6 +28,7 @@
   <a href="#repository">Repository</a>
   <a href="#environments">Environments</a>
   <a href="#principles">Principles</a>
+  <a href="#docs">Docs</a>
   <a href="#settings">Settings</a>
 </nav>
 
@@ -168,6 +169,94 @@
       </form>
     </div>
     {% endfor %}
+  </div>
+</section>
+
+<section class="detail-section" id="docs">
+  <div class="section-head">
+    <h2>Project docs</h2>
+    <span class="status-badge tone-{{ 'merged' if docs.synced else 'neutral' }}">
+      <span class="status-badge-inner"><span class="label">{{ "Synced" if docs.synced else "Cached" }}</span></span>
+    </span>
+  </div>
+  <p class="muted">Read from <span class="mono">.caliper/manifest.yaml</span>, <span class="mono">.caliper/graph.yaml</span> and <span class="mono">.caliper/decisions/</span> on the default branch.</p>
+
+  {% if docs_message %}
+  <div class="alert" role="status">{{ docs_message }}</div>
+  {% endif %}
+  {% if docs_error %}
+  <div class="alert danger" role="alert">{{ docs_error }}</div>
+  {% endif %}
+  {% if docs.error %}
+  <div class="setup-note bad" role="status">{{ docs.error }}</div>
+  {% endif %}
+  {% if docs.missing %}
+  <p class="helper">Missing: <span class="mono">{{ docs.missing|join(", ") }}</span></p>
+  {% endif %}
+
+  <div class="form-actions inline-actions">
+    <form method="post" action="/projects/{{ project.id }}/docs/sync">
+      <button class="btn secondary" type="submit">Sync from repository</button>
+    </form>
+    {% if docs.missing %}
+    <form method="post" action="/projects/{{ project.id }}/docs/init">
+      <button class="btn primary" type="submit">Create missing docs</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <div class="principles-grid">
+    <div class="card">
+      <h3>Manifest</h3>
+      <pre class="principle-content">{{ docs.manifest_text or "No .caliper/manifest.yaml yet." }}</pre>
+    </div>
+    <div class="card">
+      <h3>Graph</h3>
+      {% if docs.graph %}
+      <p class="helper">{{ docs.graph.nodes|length }} nodes, {{ docs.graph.edges|length }} edges.</p>
+      {% endif %}
+      {% if docs.graph_error %}
+      <div class="alert danger" role="alert">{{ docs.graph_error }}</div>
+      {% endif %}
+      <pre class="principle-content">{{ docs.graph_text or "No .caliper/graph.yaml yet." }}</pre>
+    </div>
+    <div class="card">
+      <h3>Decisions</h3>
+      {% if docs.decisions %}
+      {% for decision in docs.decisions %}
+      <details class="decision-item">
+        <summary><span class="mono">{{ decision.name }}</span> {{ decision.title }}</summary>
+        <pre class="principle-content">{{ decision.content }}</pre>
+      </details>
+      {% endfor %}
+      {% else %}
+      <p class="muted">No decisions yet. Append one Markdown file under <span class="mono">.caliper/decisions/</span>.</p>
+      {% endif %}
+      <details class="decision-item">
+        <summary>Add decision</summary>
+        <form method="post" action="/projects/{{ project.id }}/decisions" class="form">
+          <label class="field">
+            <span>Title</span>
+            <input type="text" name="title" required autocomplete="off">
+          </label>
+          <label class="field">
+            <span>Decision</span>
+            <textarea name="decision" rows="3" required></textarea>
+          </label>
+          <label class="field">
+            <span>Reason</span>
+            <textarea name="reason" rows="3" required></textarea>
+          </label>
+          <label class="field">
+            <span>Alternatives rejected <span class="helper">(optional)</span></span>
+            <textarea name="alternatives" rows="2"></textarea>
+          </label>
+          <div class="form-actions">
+            <button class="btn secondary" type="submit">Add decision</button>
+          </div>
+        </form>
+      </details>
+    </div>
   </div>
 </section>
 
