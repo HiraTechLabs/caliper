@@ -1,0 +1,260 @@
+# graph.yaml — Caliper component graph (source of truth)
+# docs/GRAPH.md is the human-readable view; this file is authoritative.
+# CI graph-check (when wired) fails if any edge references a missing component.
+
+nodes:
+  - id: app-core
+    path: caliper/main.py
+    kind: application
+    description: >
+      FastAPI HTTP surface and composition root: dashboard, project list/create/detail
+      with setup checklist, request composer, request page (plan/diff/review/actions),
+      /health, the run() entrypoint (bind 127.0.0.1:8080 by default), the JSON API under
+      /api for repository access, principles, project docs, environments and project
+      deletion, and GET /api/events (Server-Sent Events).
+  - id: workflow-engine
+    path: caliper/workflow.py
+    kind: domain
+    description: >
+      Synchronous pipeline submitted -> planning -> executing -> reviewing ->
+      awaiting_approval (or requested-changes loop, max 3, then failed) ->
+      approve&merge -> deploy_dev -> approve_prod -> live. Owns artifact paths,
+      review validation (per-rule verdicts mandatory) and takes the rule IDs of
+      the project from its APPROVED principles.
+  - id: http-model-adapters
+    path: caliper/http_models.py
+    kind: domain
+    description: >
+      OpenAI-compatible HTTP role adapters (chat/completions) with test-injectable
+      transport: planner must cite rule IDs, executor returns fenced diff,
+      reviewer must return per-rule JSON verdicts. Disabled by default.
+  - id: models-config
+    path: caliper/models_config.py
+    kind: domain
+    description: >
+      Loads/validates models.yaml (three roles, base_url + model, keys under
+      CALIPER_SECRETS_DIR) and enforces three DISTINCT model ids at startup.
+      Blank roles block workflow runs; the factory builds HTTP role adapters.
+  - id: deploy-adapter
+    path: caliper/workflow.py
+    kind: domain
+    description: >
+      Deploy adapter interface; MockDeployAdapter records dev/prod deploys.
+      Real SSH/docker adapter deferred until a real environment is reachable.
+  - id: principles
+    path: caliper/principles.py
+    kind: domain
+    description: >
+      Principle rule format (IDs of the form XXX-NNN), the three states
+      (missing/draft/approved), the starter document (a heading and one
+      instruction line, never invented rules) and PrinciplesService, which reads
+      and writes .caliper/principles/*.md in the project repository and records
+      the approval as a content hash plus a commit.
+  - id: project-docs
+    path: caliper/project_docs.py
+    kind: domain
+    description: >
+      ProjectDocsService: reads and writes .caliper/manifest.yaml, .caliper/graph.yaml
+      and append-only .caliper/decisions/*.md in the project repository. Reads the
+      local clone for page loads, syncs on demand, creates only missing docs, and
+      validates graph node/edge references. Graph and decisions are passed to the
+      model prompts.
+  - id: git-repo-access
+    path: caliper/repo.py
+    kind: infrastructure
+    description: >
+      Git access for one project repository through the git CLI and the project
+      deploy key: clone, default branch detection, fetch/reset of that branch,
+      reading a file, and writing + committing + pushing one or many files to the
+      default branch.
+  - id: remote-access
+    path: caliper/remote.py
+    kind: infrastructure
+    description: >
+      SSH and key helpers: ed25519 key generation under CALIPER_SECRETS_DIR
+      (mode 600), repository read/write probe (ls-remote plus push --dry-run),
+      host key scanning and SHA256 fingerprinting, host key pinning in a
+      per-environment known_hosts file, and the environment probe (ssh true,
+      docker compose version, deploy path exists and writable) that maps every
+      failure to a plain reason with the exact fix command.
+  - id: project-registry
+    path: caliper/registry.py
+    kind: domain
+    description: >
+      ProjectRegistry: validation + id slug + persistence of the local runtime
+      manifest.yaml (repo url and its verification, optional product field, the state
+      of the six principles, dev/prod environment definitions and host key
+      fingerprint), the per-project deploy key, the per-environment SSH keys and
+      known_hosts files, and the repository/environment connection tests. The
+      portable project manifest lives in .caliper/manifest.yaml in the repository.
+  - id: request-store
+    path: caliper/state.py
+    kind: data-store
+    description: >
+      SQLite run state (CALIPER_DB_PATH default .caliper-state/state.sqlite3):
+      request id/kind/text/extra/status/loop_count/review_note plus append-only
+      audit_events. Publishes committed changes to the event bus and supports
+      single-request delete, cancel/restore, and delete-in-one-transaction. Safely
+      deletable.
+  - id: event-bus
+    path: caliper/events.py
+    kind: infrastructure
+    description: >
+      In-process fan-out from request-store writes to per-browser SSE queues;
+      bounded queues drop stale tokens for slow clients.
+  - id: project-deletion
+    path: caliper/deletion.py
+    kind: domain
+    description: >
+      Safe remove-from-Caliper: cancel active requests, optional Dev/Prod stop
+      before any deletion, abort on failure, remove only resolved paths under
+      CALIPER_DATA_DIR/projects/<id> and CALIPER_SECRETS_DIR/projects/<id>, then
+      delete DB rows plus audit. Never touches the GitHub repository or .caliper/.
+  - id: app-ui
+    path: caliper/templates
+    kind: presentation
+    description: >
+      Jinja2 server-rendered screens per draft UI_SYSTEM: dashboard
+      (needs-you/in-progress/recent), projects list, add form, project page with
+      setup checklist/environments/delete dialog, request page (stepper, review rows
+      failed-first, plan, diff, approve gates, request delete confirmation), composer,
+      empty/missing/error states. Vanilla JS subscribes to SSE and updates request
+      states without reload.
+  - id: project-store
+    path: projects/
+    kind: data-store
+    description: >
+      Runtime-only project data written by project-registry and workflow-engine:
+      one directory per project (manifest, local clone of the repository,
+      req-<n>/ artifacts). Not committed; location overridable via
+      CALIPER_PROJECTS_ROOT.
+  - id: tests
+    path: tests/
+    kind: test-suite
+    description: >
+      pytest suite (130 passing, 1 skipped on Windows) covering: scaffold smoke,
+      registry, request state store, request UI flows, workflow engine (success path,
+      review loop exhaustion, validation), workflow UI (run/approve gates),
+      models.yaml validation, HTTP adapters with fake transport, dashboard/global
+      composer/status snapshot, repository access (deploy key, read/write probe),
+      the principles/environments API (states, approval rules, Git round trip
+      against a local repository, SSH key and ssh-copy-id command, host key pinning
+      and a changed host key), project docs (.caliper manifest/graph/decisions Git
+      round trip, invalid graph reporting, docs API/UI, decision authoring, prompt context), safe project
+      deletion and SSE. Mock role adapters live only here.
+
+edges:
+  - from: app-core
+    to: workflow-engine
+    relation: uses
+  - from: app-core
+    to: request-store
+    relation: creates-lists-updates-and-deletes-requests
+  - from: app-core
+    to: principles
+    relation: exposes-principles-and-environment-api
+  - from: app-core
+    to: project-docs
+    relation: exposes-project-docs-api
+  - from: app-ui
+    to: project-docs
+    relation: displays-data-from
+  - from: workflow-engine
+    to: project-docs
+    relation: reads-graph-and-decisions-for-model-context
+  - from: project-docs
+    to: git-repo-access
+    relation: reads-and-writes-project-docs-in
+  - from: project-docs
+    to: project-registry
+    relation: reads-local-runtime-manifest
+  - from: workflow-engine
+    to: http-model-adapters
+    relation: role-calls-when-configured
+  - from: models-config
+    to: http-model-adapters
+    relation: builds-when-configured
+  - from: workflow-engine
+    to: deploy-adapter
+    relation: deploys-through
+  - from: workflow-engine
+    to: principles
+    relation: reads-approved-rule-ids
+  - from: workflow-engine
+    to: project-store
+    relation: writes-artifacts
+  - from: principles
+    to: git-repo-access
+    relation: reads-and-writes-principles-in
+  - from: git-repo-access
+    to: remote-access
+    relation: uses-deploy-key-of
+  - from: project-registry
+    to: principles
+    relation: stores-approval-records
+  - from: project-registry
+    to: remote-access
+    relation: uses-for-keys-and-connection-tests
+  - from: project-registry
+    to: project-store
+    relation: writes
+  - from: app-ui
+    to: project-registry
+    relation: displays-data-from
+  - from: app-ui
+    to: request-store
+    relation: displays-data-from
+  - from: app-core
+    to: models-config
+    relation: loads-at-startup
+  - from: app-core
+    to: project-deletion
+    relation: deletes-through
+  - from: app-core
+    to: event-bus
+    relation: streams-sse-from
+  - from: request-store
+    to: event-bus
+    relation: publishes-changes-to
+  - from: project-deletion
+    to: request-store
+    relation: cancels-and-deletes-run-state-in
+  - from: project-deletion
+    to: remote-access
+    relation: optionally-stops-environments-through
+  - from: tests
+    to: app-core
+    relation: tests
+  - from: tests
+    to: project-registry
+    relation: tests
+  - from: tests
+    to: request-store
+    relation: tests
+  - from: tests
+    to: workflow-engine
+    relation: tests
+  - from: tests
+    to: models-config
+    relation: tests
+  - from: tests
+    to: http-model-adapters
+    relation: tests-with-fake-transport
+  - from: tests
+    to: principles
+    relation: tests
+  - from: tests
+    to: project-docs
+    relation: tests-git-round-trip-and-prompt-context
+  - from: tests
+    to: git-repo-access
+    relation: tests-against-a-local-repository
+  - from: tests
+    to: remote-access
+    relation: tests-with-a-fake-ssh-runner
+  - from: tests
+    to: project-deletion
+    relation: tests-safe-deletion
+  - from: tests
+    to: event-bus
+    relation: tests-sse
