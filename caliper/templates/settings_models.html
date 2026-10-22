@@ -50,8 +50,8 @@
         </label>
         <label class="field">
           <span>Base URL</span>
-          <input type="url" name="{{ role }}_base_url" value="{{ model.base_url }}" placeholder="http://127.0.0.1:8000/v1" autocomplete="off" {% if model.provider == 'opencode' %}disabled{% endif %}>
-          <span class="helper">{% if model.provider == 'opencode' %}Not used by the OpenCode CLI.{% else %}OpenAI-compatible base URL, usually ending in <span class="mono">/v1</span>.{% endif %}</span>
+          <input type="url" name="{{ role }}_base_url" value="{{ model.base_url }}" placeholder="http://ollama:11434/v1" autocomplete="off" {% if model.provider == 'opencode' %}disabled{% endif %}>
+          <span class="helper">{% if model.provider == 'opencode' %}Not used by the OpenCode CLI.{% else %}OpenAI-compatible base URL, usually ending in <span class="mono">/v1</span>. Inside Docker, <span class="mono">127.0.0.1</span> is the container itself; use <span class="mono">http://ollama:11434/v1</span> (compose profile) or <span class="mono">host.docker.internal</span>.{% endif %}</span>
         </label>
         <label class="field">
           <span>Model name</span>
@@ -61,7 +61,7 @@
         <label class="field">
           <span>API key</span>
           <input type="password" name="{{ role }}_api_key" value="" placeholder="{{ '******** saved' if model.has_api_key else ('not used by OpenCode' if model.provider == 'opencode' else 'optional for local runtimes') }}" autocomplete="new-password" {% if model.provider == 'opencode' %}disabled{% endif %}>
-          <span class="helper">{% if model.provider == 'opencode' %}OpenCode keeps its own credentials; Caliper stores nothing here.{% elif model.has_api_key %}A key is saved. Leave blank to keep it.{% else %}Stored outside the repo and database.{% endif %}</span>
+          <span class="helper">{% if model.provider == 'opencode' %}OpenCode keeps its own credentials; Caliper stores nothing here.{% elif model.has_api_key %}A key is saved encrypted. Leave blank to keep it.{% else %}Encrypted in the Caliper secret store; never written to YAML or the database as plaintext.{% endif %}</span>
         </label>
       </div>
       <div class="settings-card-foot">
@@ -84,7 +84,7 @@
   </div>
 
   <div class="form-actions settings-save">
-    <span class="helper">Saving writes non-secret settings to <span class="mono">CALIPER_MODELS_CONFIG</span>; keys stay under <span class="mono">CALIPER_SECRETS_DIR</span>.</span>
+    <span class="helper">Saving writes non-secret settings to <span class="mono">CALIPER_MODELS_CONFIG</span>; API keys are encrypted in the secret store under <span class="mono">CALIPER_SECRETS_DIR</span>.</span>
     <button class="btn primary" type="submit" name="action" value="save">Save models</button>
   </div>
 </form>

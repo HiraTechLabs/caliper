@@ -59,6 +59,21 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-050 | 2026-10-22 | Approval performs a real no-force Git merge and push; failures mark the request failed | (this) |
 | D-051 | 2026-10-22 | Git evidence and interruption recovery are persisted; retries reuse and reset one worktree | (this) |
 | D-052 | 2026-10-22 | The request page shows test output, branch, reviewed commit and merge commit | (this) |
+| D-053 | 2026-10-22 | Runtime config is `CALIPER_*` only, with `_FILE` variants and a fixed `/data` layout | (this) |
+| D-054 | 2026-10-22 | Secrets are AES-256-GCM in SQLite with scoped names, never plaintext | (this) |
+| D-055 | 2026-10-22 | A missing master key fails startup; `init-secrets` writes a 0600 key | (this) |
+| D-056 | 2026-10-22 | Legacy state is copied and plaintext keys migrate only after a verified encrypted read | (this) |
+| D-057 | 2026-10-22 | SSH private keys exist only as 0600 files in the runtime tmpfs | (this) |
+| D-058 | 2026-10-22 | Readiness is separate from liveness and checks DB, data dir and unlocked store | (this) |
+| D-059 | 2026-10-22 | SIGTERM marks in-flight runs `interrupted` and resumable, not `failed` | (this) |
+| D-060 | 2026-10-22 | Logs are JSON on stdout with redaction; secrets and prompts are never logged | (this) |
+| D-061 | 2026-10-22 | Request worktrees live under `CALIPER_DATA_DIR/work/<project>/<request>` | (this) |
+| D-062 | 2026-10-22 | The container is multi-stage, non-root UID 10001, with a read-only rootfs | (this) |
+| D-063 | 2026-10-22 | Compose publishes loopback only, keeps the key in a secret file, and makes Ollama opt-in | (this) |
+| D-064 | 2026-10-22 | Container acceptance tests are gated by a built image; static checks always run | (this) |
+| D-065 | 2026-10-22 | Model settings live in `/data/models.yaml` and API keys in the encrypted store | (this) |
+| D-066 | 2026-10-22 | Caliper is single-instance by design until a later Postgres split | (this) |
+| D-067 | 2026-10-22 | The secret store verifies the master key at startup, before readiness | (this) |
 
 ## Entries
 
@@ -821,3 +836,220 @@ Format: id, date, decision, reason, alternatives rejected.
 - **Alternatives rejected:** showing only "merged" (cannot distinguish a real push from an old
   marker); a separate diagnostics page (the approval screen must contain the evidence); raw
   unbounded test output (unreadable page and unbounded prompt growth).
+
+### D-053 — Runtime config is `CALIPER_*` only, with `_FILE` variants and a fixed `/data` layout
+- **Decision:** `caliper/config.py` reads every runtime setting from `CALIPER_*` environment
+  variables. Secret-like settings also accept `<NAME>_FILE` (for example
+  `CALIPER_MASTER_KEY_FILE`), which takes precedence and fails loudly when configured but
+  unreadable. Writable state is one tree: `CALIPER_DATA_DIR` (default `/data`) contains
+  `caliper.db`, `projects/`, `work/`, `secrets/` and `models.yaml`; the ephemeral runtime
+  directory (`CALIPER_RUNTIME_DIR`, default `/run/caliper`) is separate. Individual paths remain
+  overridable for tests and unusual deployments.
+- **Reason:** PLAN_P1 3.1 requires a container-friendly layout where the only persistent mount is
+  `/data` and the root filesystem can stay read-only. File-based secret mounts are the standard
+  Docker/Kubernetes way to avoid putting a secret in the environment or an image layer.
+- **Alternatives rejected:** scattered defaults under the repository root (state would vanish or
+  become read-only in a container); reading secrets only from environment variables (visible in
+  `docker inspect`); silently falling back when `_FILE` is set but unreadable (hides a broken
+  mount).
+
+### D-054 — Secrets are AES-256-GCM in SQLite with scoped names, never plaintext
+- **Decision:** `caliper/secrets.py` stores values in `secrets/store.sqlite3` encrypted with
+  AES-256-GCM from `cryptography`. Every write uses a fresh 96-bit random nonce. The scope and
+  name are authenticated as associated data, so a ciphertext moved to another scope/name fails
+  to decrypt. The public API is `put/get/delete/exists/list(scope)/delete_scope`; `list` returns
+  names only, and no error message contains a value. Allowed scopes are `project/<id>`,
+  `env/<project>/{dev,prod}` and `model/{planning,execution,review}`. The SQLite file is created
+  with mode 0600 inside a 0700 directory.
+- **Reason:** PLAN_P1 3.2 requires encryption at rest and a store both environments and model
+  access can share. AES-GCM authenticates the ciphertext and scope binding prevents confused-
+  deputy mistakes where a key is read from the wrong project or role.
+- **Alternatives rejected:** plaintext key files (the Phase 0c state); encryption with a
+  non-authenticated mode (tampering would be undetected); one key per scope (more key management
+  with no benefit here); returning values from `list` (the UI and logs only need names).
+
+### D-055 — A missing master key fails startup; `init-secrets` writes a 0600 key
+- **Decision:** `python -m caliper init-secrets [--output PATH]` generates 32 random bytes,
+  base64-encodes them, and writes the file atomically with mode 0600. Startup requires
+  `CALIPER_MASTER_KEY_FILE` or `CALIPER_MASTER_KEY`; without a valid 32-byte key Caliper refuses
+  to start and prints the exact command and recovery instructions. `init-secrets` never
+  overwrites an existing key unless `--force` is passed. The README states that a key stored next
+  to `/data` weakens the model and that Docker/Kubernetes secrets are preferred.
+- **Reason:** PLAN_P1 3.2 makes the key the one unavoidable prerequisite for every stored secret.
+  Failing before accepting requests is safer than starting in a locked state that silently makes
+  every project unusable. Atomic 0600 creation prevents a partially written or world-readable key.
+- **Alternatives rejected:** generating the key automatically on first start (the operator would
+  not know where the only copy is, and a lost key cannot be recovered); overwriting an existing
+  key (every stored secret would become unreadable); storing the key in the same SQLite file
+  (encryption would be decorative).
+
+### D-056 — Legacy state is copied and plaintext keys migrate only after a verified encrypted read
+- **Decision:** On startup `caliper/migrate.py` copies a Phase 0c
+  `.caliper-state/state.sqlite3` into `<data>/caliper.db` only when the target does not exist and
+  the copy passes `PRAGMA integrity_check`; the legacy file is kept. Plaintext model keys, deploy
+  keys, environment keys and known_hosts files are moved into the encrypted store/cache and read
+  back; only then is each plaintext copy overwritten and removed. A different value already
+  present in the store is an error, not an overwrite, and a wrong master key is an error. Reruns
+  are safe.
+- **Reason:** AGENTS.md 12.7 and PLAN_P1 3.2 require migration without destroying the only copy
+  of a secret. A failed migration must leave the old file usable, and a running store must never
+  silently lose the value it already uses.
+- **Alternatives rejected:** moving the legacy database (a failed start would leave no copy);
+  deleting plaintext before verification; overwriting an existing encrypted value (would change
+  which key Git and SSH use); failing silently and starting with missing keys.
+
+### D-057 — SSH private keys exist only as 0600 files in the runtime tmpfs
+- **Decision:** `caliper/secret_files.py` materializes a decrypted private key into
+  `CALIPER_RUNTIME_DIR` (a tmpfs in the container) with mode 0600, yields it for exactly one
+  operation, then overwrites the bytes with zeros and unlinks it on success, failure and
+  cancellation. Nothing materialized is written under `CALIPER_DATA_DIR`. Public keys are cached
+  under `secrets/public/<project>/` so the UI and `ssh-copy-id` command can show them without a
+  private key.
+- **Reason:** SSH and Git require a file path, but keeping a decrypted private key on a persistent
+  volume would defeat the encrypted store. A tmpfs disappears with the container and the
+  context manager removes the file even when an operation raises.
+- **Alternatives rejected:** keeping plaintext keys in `CALIPER_SECRETS_DIR` (the pre-Phase-1
+  behaviour); passing key material on the command line (visible in the process list); relying on
+  process exit to clean up (a long-running Caliper would leave files behind).
+
+### D-058 — Readiness is separate from liveness and checks DB, data dir and unlocked store
+- **Decision:** `GET /health/live` reports that the process is up. `GET /health/ready` checks a
+  SQLite `SELECT 1`, a real write to the data directory, the unlocked secret store and completed
+  startup, returning 503 with a per-check reason otherwise. `GET /health` remains a
+  backward-compatible liveness alias. Readiness is 503 before the lifespan startup checks run.
+- **Reason:** PLAN_P1 3.3 and the container `HEALTHCHECK` need a signal that Caliper can actually
+  serve a request, not merely that a socket is open. Per-check details let an operator see
+  whether the mount, the database or the master key is the problem.
+- **Alternatives rejected:** one `/health` that always returns 200 (Docker would keep routing to
+  a broken instance); checking only process liveness (a locked store makes every project action
+  fail); returning a raw exception (unreadable and may contain paths or secrets).
+
+### D-059 — SIGTERM marks in-flight runs `interrupted` and resumable, not `failed`
+- **Decision:** `caliper/lifecycle.py` tracks active runs. On shutdown Caliper stops accepting
+  new runs, sets a stop event observed by the workflow at phase boundaries, marks every active or
+  still in-flight request `interrupted` with a reason, waits up to
+  `CALIPER_SHUTDOWN_GRACE_SECONDS`, and exits cleanly. Startup recovery does the same for rows
+  left in `planning`/`executing`/`reviewing`. `interrupted` is a resumable status distinct from
+  `failed`; the recorded base commit and branch are kept. The workflow accepts `submitted` and
+  `interrupted` as runnable.
+- **Reason:** PLAN_P1 3.3 requires a resumable interruption. A process exit is not a review
+  verdict, so calling the request `failed` would misreport what happened and hide the retry path.
+  The grace period lets a run stop at a safe boundary without waiting forever for a model call.
+- **Alternatives rejected:** killing the process without recording state (a request could stay
+  "executing" forever); marking in-flight work `failed` (no verdict was produced); blocking
+  shutdown until a model call returns (Docker would SIGKILL after its timeout and lose the
+  reason).
+
+### D-060 — Logs are JSON on stdout with redaction; secrets and prompts are never logged
+- **Decision:** `caliper/logging_setup.py` installs one JSON handler on the root logger
+  (`ts`, `level`, `logger`, `message`) and routes uvicorn logs through it. A redaction filter
+  replaces registered secret values in messages and exceptions. Request bodies, model prompts,
+  API keys and private keys are never logged by Caliper. `run()` configures logging before
+  startup; `create_app()` does not reconfigure an embedding process.
+- **Reason:** PLAN_P1 3.3 requires JSON stdout logs and section 1 forbids secrets in logs. A
+  formatter alone is not enough because an exception can embed a value, so the filter is a
+  safety net in addition to not logging the value in the first place.
+- **Alternatives rejected:** plain text logs (harder for a container log pipeline and for
+  structured tests); relying only on discipline (one accidental `%s` would leak); logging full
+  prompts for debugging (they contain project code and request text).
+
+### D-061 — Request worktrees live under `CALIPER_DATA_DIR/work/<project>/<request>`
+- **Decision:** `RequestWorkspaceService` creates one worktree per request under
+  `CALIPER_WORK_ROOT` (default `<data>/work/<project>/<request>`), not inside the project
+  directory. Project deletion removes that work root after resolving it and asserting it is
+  under `CALIPER_DATA_DIR/work`; the same confinement is checked before request artifacts are
+  deleted.
+- **Reason:** PLAN_P1 3.1 names `work/` as the writable worktree area, and separating worktrees
+  from the project record makes cleanup and backup scope clear. A single confinement check keeps
+  surprising `..` or symlink paths from deleting anything outside `/data`.
+- **Alternatives rejected:** keeping worktrees under `projects/<id>/worktrees` (mixes source
+  record and disposable work); using `/tmp` (not backed by the persistent volume and not visible
+  for debugging); trusting the path string without resolving it.
+
+### D-062 — The container is multi-stage, non-root UID 10001, with a read-only rootfs
+- **Decision:** The `Dockerfile` pins the `python:3.12-slim-bookworm` base by digest and `git`
+  and `openssh-client` by Debian version. A builder stage installs the locked runtime
+  requirements (`requirements.lock`, including `cryptography`) and builds a wheel; the runtime
+  stage installs only that wheel, creates user/group `10001`, and runs as `10001:10001`. It
+  exposes 8080, declares a `HEALTHCHECK` against `/health/ready`, and expects `/data` plus the
+  runtime tmpfs to be the only writable paths. There is no Node stage because the current UI is
+  static Jinja/JS; the image does not bake in test files, data or secrets. A `test` target runs
+  the full pytest suite inside the image.
+- **Reason:** PLAN_P1 3.4 requires a pinned, non-root, read-only container with git and SSH.
+  A separate builder keeps compilers and build caches out of the runtime image; a wheel keeps
+  package metadata reproducible.
+- **Alternatives rejected:** a single-stage image (larger and includes build tooling); running as
+  root (unnecessary privilege); `latest` tags (not reproducible); adding a Node stage now (no
+  frontend build exists yet; it would be an unexplained component).
+
+### D-063 — Compose publishes loopback only, keeps the key in a secret file, and makes Ollama opt-in
+- **Decision:** `compose.yaml` publishes `127.0.0.1:8080:8080`, uses the named volume
+  `caliper-data` for `/data`, mounts the master key as the Compose secret
+  `caliper_master_key` (host path default `./secrets/master.key`, overridable with
+  `CALIPER_MASTER_KEY_HOST_FILE`), sets `read_only`, `no-new-privileges`, `cap_drop: ALL`,
+  tmpfs for `/tmp` and `/run/caliper`, and limits memory to 2g. The optional `ollama` service is
+  behind the `ollama` profile, uses `ollama/ollama:0.12.6`, has a `ollama-models` volume and no
+  published port. The host Docker socket is never mounted; `extra_hosts` maps
+  `host.docker.internal` for a model on the Docker host.
+- **Reason:** PLAN_P1 3.5 and AGENTS.md 7b keep the UI off the network and deploys over SSH only.
+  A secret file avoids the key in `docker inspect`; a non-published Ollama avoids exposing a
+  model runtime to the host network.
+- **Alternatives rejected:** publishing `0.0.0.0:8080` (exposes an unauthenticated UI); passing
+  the master key as a plain environment variable (visible in inspect); mounting
+  `/var/run/docker.sock` (would give Caliper root-equivalent host access); enabling Ollama by
+  default (unnecessary download and attack surface).
+
+### D-064 — Container acceptance tests are gated by a built image; static checks always run
+- **Decision:** `tests/test_container_assets.py` checks the Dockerfile/Compose invariants in
+  every test run. `tests/test_container_integration.py` is skipped unless
+  `CALIPER_CONTAINER_IMAGE` names an image; it starts that image with the Compose security
+  posture, waits for readiness, creates a project and deploy key, verifies persistence across a
+  restart, checks UID 10001/read-only/no socket, inspects that the runtime tmpfs is clean, and
+  proves the master key and private key do not appear in logs or the SQLite store.
+- **Reason:** PLAN_P1 3 acceptance requires real container behaviour, but the normal unit suite
+  must still run on machines without Docker. Static checks catch accidental removal of the
+  hardening; the gated test catches a broken image without turning every local run into a Docker
+  build.
+- **Alternatives rejected:** marking the integration test as always-on (CI without Docker would
+  fail); testing only the Dockerfile text (would not prove readiness or persistence); using
+  TestClient as a substitute (it never exercises the container filesystem or uid).
+
+### D-065 — Model settings live in `/data/models.yaml` and API keys in the encrypted store
+- **Decision:** Non-secret model settings are read from `CALIPER_MODELS_CONFIG` (default
+  `<data>/models.yaml`). API keys are read/written only through the secret store under
+  `model/<role>` with name `api_key`; `ModelsSettings.key_path()` remains only for the one-way
+  legacy migration. Rotating a key replaces the encrypted value with a fresh nonce; clearing it
+  deletes the record. The settings page and API never return a key, only whether one exists.
+- **Reason:** PLAN_P1 3.2 includes model keys in the migration and forbids plaintext secrets.
+  Keeping non-secret settings in YAML preserves the existing editable configuration while the
+  key itself is protected like deploy and environment keys.
+- **Alternatives rejected:** putting keys in `models.yaml` (the pre-Phase-1 file); keeping a
+  separate plaintext key file (another thing to migrate and leak); storing keys in environment
+  variables (visible in inspect and hard to rotate per role).
+
+### D-066 — Caliper is single-instance by design until a later Postgres split
+- **Decision:** The supported topology is one Caliper container with one persistent
+  `caliper-data` volume. SQLite (`/data/caliper.db` plus the encrypted store) is the only run
+  state; there is no shared-database mode, no replica count and no multi-writer coordination.
+  Backups copy `/data` and separately back up the master key, because the key is deliberately
+  not stored with the data. Postgres, Kubernetes and a split API/worker are deferred.
+- **Reason:** PLAN_P1 section 7 explicitly asks for the single-instance limitation and defers
+  Postgres. Phase 1 is about a correct container foundation, not a distributed system; a second
+  writer against the same SQLite file would corrupt run state or silently lose writes.
+- **Alternatives rejected:** running multiple replicas against the volume (SQLite locking is not
+  a multi-node coordination mechanism); adding Postgres now (unrequested scope and a new
+  dependency); keeping state outside `/data` (would defeat the backup and upgrade story).
+
+### D-067 — The secret store verifies the master key at startup, before readiness
+- **Decision:** `secrets/store.sqlite3` contains a `store_meta` row holding a fixed non-secret
+  marker encrypted with the master key. When the store is opened, Caliper decrypts that marker;
+  a well-formed but wrong key makes the store report itself locked, logs the mismatch, and fails
+  startup (readiness returns 503 if the app is already serving). The marker is written only when
+  the store has none, so opening an existing store never changes user data.
+- **Reason:** PLAN_P1 3.2 says Caliper must refuse to start with an invalid key, not merely an
+  absent one. Without a verifier a wrong 32-byte key looks healthy until the first secret is read,
+  which turns a startup mistake into a failed workflow later.
+- **Alternatives rejected:** trusting the key length alone (a wrong key of the right length still
+  passes); decrypting an arbitrary real secret at startup (adds no new information and leaks which
+  scope is used); storing a plain hash of the key (offline guesses become cheaper than against
+  AES-GCM ciphertext).

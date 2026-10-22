@@ -1,8 +1,10 @@
 import asyncio
 import json
+import logging
 import os
 import queue
 import shutil
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 
@@ -12,49 +14,95 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from caliper.config import (
+    CaliperConfig,
+    ConfigError,
+    check_writable,
+)
 from caliper.deletion import ProjectDeleteError, ProjectDeleter
 from caliper.events import EventBus
+from caliper.lifecycle import Lifecycle, ShuttingDown
+from caliper.logging_setup import configure_logging
+from caliper.migrate import MigrationError, migrate_legacy
 from caliper.models_config import ROLE_ORDER, ModelsConfigError, ModelsSettings, probe_role
 from caliper.principles import PrinciplesError, PrinciplesService
 from caliper.project_docs import ProjectDocsError, ProjectDocsService
 from caliper.registry import ENVIRONMENT_ORDER, ProjectError, ProjectRegistry
+from caliper.secrets import SecretStore
 from caliper.state import ACTIVE_STATUSES, IN_FLIGHT_STATUSES, VALID_KINDS, RequestStore
 
 BASE_DIR = Path(__file__).resolve().parent
+logger = logging.getLogger("caliper.app")
+
+RESTART_REASON = (
+    "Caliper restarted while this request was running. Its in-flight state is unknown; "
+    "the request was marked interrupted and can be run again from its recorded base commit."
+)
 
 
 class RequestDeleteError(Exception):
     pass
 
 
+def _config_for(registry: ProjectRegistry | None) -> CaliperConfig:
+    """Runtime config; an injected registry (tests) keeps its own paths."""
+    config = CaliperConfig.from_env()
+    if registry is None:
+        return config
+    data_dir = Path(registry.projects_root).parent
+    return CaliperConfig(
+        data_dir=data_dir,
+        db_path=Path(os.environ.get("CALIPER_DB_PATH") or data_dir / "caliper.db"),
+        projects_root=Path(registry.projects_root),
+        work_root=Path(registry.work_root),
+        secrets_dir=Path(registry.secrets_root),
+        models_config=Path(os.environ.get("CALIPER_MODELS_CONFIG") or data_dir / "models.yaml"),
+        runtime_dir=Path(registry.runtime_dir),
+        host=config.host,
+        port=config.port,
+        log_level=config.log_level,
+        shutdown_grace_seconds=config.shutdown_grace_seconds,
+    )
+
+
 def create_app(registry: ProjectRegistry | None = None, requests: RequestStore | None = None,
                workflow=None, principles: PrinciplesService | None = None,
                project_docs: ProjectDocsService | None = None,
                models_settings: ModelsSettings | None = None, probe=None,
-               project_deleter: ProjectDeleter | None = None) -> FastAPI:
+               project_deleter: ProjectDeleter | None = None,
+               config: CaliperConfig | None = None,
+               secret_store: SecretStore | None = None,
+               lifecycle: Lifecycle | None = None) -> FastAPI:
+    config = config or _config_for(registry)
+    if secret_store is None and registry is not None:
+        secret_store = registry.secret_store
     if registry is None:
-        data_dir = Path(os.environ.get("CALIPER_DATA_DIR", str(BASE_DIR.parent)))
-        projects_root = Path(os.environ.get("CALIPER_PROJECTS_ROOT", str(data_dir / "projects")))
-        registry = ProjectRegistry(projects_root)
-    else:
-        data_dir = Path(registry.projects_root).parent
+        registry = ProjectRegistry(
+            config.projects_root,
+            secrets_dir=config.secrets_dir,
+            secret_store=secret_store,
+            runtime_dir=config.runtime_dir,
+            work_root=config.work_root,
+        )
+        secret_store = registry.secret_store
+    if secret_store is None:
+        secret_store = registry.secret_store
     if requests is None:
-        db_path = os.environ.get("CALIPER_DB_PATH", str(data_dir / ".caliper-state" / "state.sqlite3"))
-        requests = RequestStore(db_path)
+        requests = RequestStore(config.db_path)
     if principles is None:
         principles = PrinciplesService(registry)
     if project_docs is None:
         project_docs = ProjectDocsService(registry)
     bus = EventBus()
     requests.on_change = lambda change, req: bus.publish({"change": change, "id": req["id"], "request": req})
-    requests.mark_interrupted(
-        "Caliper restarted while this request was running. Its in-flight state is unknown; run it again."
-    )
     if project_deleter is None:
-        project_deleter = ProjectDeleter(registry, requests, data_dir)
+        project_deleter = ProjectDeleter(registry, requests, config.data_dir)
+    lifecycle = lifecycle or Lifecycle(requests)
 
     from caliper.workflow import Workflow
-    settings = models_settings or ModelsSettings()
+    settings = models_settings or ModelsSettings(
+        config.models_config, config.secrets_dir, store=secret_store
+    )
     probe_model = probe or probe_role
     artifacts_root_override = os.environ.get("CALIPER_ARTIFACTS_ROOT")
     artifacts_root = Path(artifacts_root_override) if artifacts_root_override else Path(registry.projects_root)
@@ -67,13 +115,75 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
                 requests, registry, artifacts_root,
                 planning=adapters["planning"], execution=adapters["execution"],
                 review=adapters["review"], docs=project_docs,
+                stop_event=lifecycle.stop_event,
             )
-        return Workflow(requests, registry, artifacts_root, docs=project_docs)
+        return Workflow(
+            requests, registry, artifacts_root, docs=project_docs,
+            stop_event=lifecycle.stop_event,
+        )
 
     if workflow is None:
         workflow = build_workflow()
+    elif getattr(workflow, "stop_event", None) is None:
+        workflow.stop_event = lifecycle.stop_event
 
-    app = FastAPI(title="Caliper", version="0.1.0")
+    def startup() -> None:
+        """Validate configuration, migrate legacy state and recover interrupted runs."""
+        if app.state.startup_done:
+            return
+        config.ensure_directories()
+        writable, message = check_writable(config.data_dir)
+        if not writable:
+            raise ConfigError(message)
+        writable, message = check_writable(config.runtime_dir)
+        if not writable:
+            raise ConfigError(message)
+        if not secret_store.unlocked:
+            # Raises the exact init-secrets command when no key is configured.
+            config.load_master_key()
+            raise ConfigError(
+                f"The secret store at {secret_store.path} is locked: {secret_store.locked_reason} "
+                "Restart Caliper with a valid CALIPER_MASTER_KEY_FILE."
+            )
+        try:
+            report = migrate_legacy(config, secret_store, logger)
+        except MigrationError as exc:
+            raise ConfigError(
+                f"{exc}\nCaliper did not start, so no legacy file was destroyed. "
+                "Fix the item above, then start Caliper again."
+            ) from exc
+        if report.get("database") or report.get("models_config"):
+            logger.info("Legacy Phase 0c data migrated into %s.", config.data_dir)
+        recovered = requests.mark_interrupted(RESTART_REASON, status="interrupted")
+        if recovered:
+            logger.warning(
+                "Marked %d request(s) interrupted after restart: %s",
+                len(recovered), ", ".join(row["id"] for row in recovered),
+            )
+        app.state.startup_done = True
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        startup()
+        try:
+            yield
+        finally:
+            lifecycle.start_shutdown()
+            interrupted = lifecycle.shutdown()
+            if interrupted:
+                logger.warning(
+                    "Shutdown interrupted %d active request(s): %s",
+                    len(interrupted), ", ".join(row["id"] for row in interrupted),
+                )
+            lifecycle.wait_idle(config.shutdown_grace_seconds)
+            secret_store.close()
+
+    app = FastAPI(title="Caliper", version="0.1.0", lifespan=lifespan)
+    app.state.caliper_config = config
+    app.state.secret_store = secret_store
+    app.state.lifecycle = lifecycle
+    app.state.startup_done = False
+    app.state.startup = startup
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=BASE_DIR / "templates")
     static_dir = BASE_DIR / "static"
@@ -165,7 +275,39 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
 
     @app.get("/health")
     async def health():
+        """Backward-compatible liveness alias."""
         return {"status": "ok", "app": "caliper", "version": "0.1.0"}
+
+    @app.get("/health/live")
+    async def health_live():
+        return {"status": "ok", "check": "live", "app": "caliper", "version": "0.1.0"}
+
+    @app.get("/health/ready")
+    async def health_ready():
+        checks: dict[str, dict] = {}
+        try:
+            requests.ping()
+            checks["database"] = {"ok": True, "detail": "SQLite responds to SELECT 1."}
+        except Exception as exc:
+            checks["database"] = {"ok": False, "detail": f"SQLite is not reachable: {exc}"}
+        writable, message = check_writable(config.data_dir)
+        checks["data_dir"] = {"ok": writable, "detail": message}
+        if secret_store.unlocked:
+            checks["secret_store"] = {"ok": True, "detail": "Secret store is unlocked."}
+        else:
+            checks["secret_store"] = {
+                "ok": False,
+                "detail": f"Secret store is locked: {secret_store.locked_reason}",
+            }
+        ready = all(item["ok"] for item in checks.values()) and app.state.startup_done
+        if not app.state.startup_done:
+            checks["startup"] = {"ok": False, "detail": "Startup checks have not completed."}
+            ready = False
+        status_code = 200 if ready else 503
+        return JSONResponse(
+            {"status": "ready" if ready else "not_ready", "checks": checks},
+            status_code=status_code,
+        )
 
     def _read_settings_form(form):
         entries = {
@@ -241,7 +383,7 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
                 needs.append(req)
             elif req["status"] in ("submitted", "planning", "executing", "reviewing", "merged", "deployed_dev"):
                 running.append(req)
-            elif req["status"] in ("live", "failed"):
+            elif req["status"] in ("live", "failed", "interrupted", "cancelled"):
                 recent.append(req)
         return templates.TemplateResponse(request, "dashboard.html", _ui_ctx(needs=needs, running=running, recent=recent))
 
@@ -328,10 +470,22 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             delete_error=request.query_params.get("delete_error"),
         ))
 
+    def _run_request(req_id: str):
+        lifecycle.begin(req_id)
+        try:
+            return workflow.run(req_id)
+        finally:
+            lifecycle.end(req_id)
+
     @app.post("/requests/{req_id}/run")
     async def request_run(request: Request, req_id: str):
         try:
-            workflow.run(req_id)
+            if not lifecycle.accepting_runs:
+                raise ShuttingDown(
+                    "Caliper is shutting down and is not accepting new runs. "
+                    "Start it again, then run the request."
+                )
+            await asyncio.to_thread(_run_request, req_id)
         except Exception as exc:
             return templates.TemplateResponse(request, "request_run_error.html", _ui_ctx(req_id=req_id, reason=str(exc)), status_code=422)
         return RedirectResponse(f"/requests/{req_id}", status_code=303)
@@ -439,7 +593,7 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
         stop_ready = {
             env: all(manifest["environments"][env].get(key) for key in (
                 "host", "user", "deploy_path", "compose_file",
-            )) and registry.environment_key_path(project_id, env).is_file()
+            )) and registry.environment_key_exists(project_id, env)
             for env in ("dev", "prod")
         }
         return templates.TemplateResponse(
@@ -831,10 +985,22 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
     return app
 
 
-app = create_app()
-
-
 def run() -> None:
-    host = os.environ.get("CALIPER_HOST", "127.0.0.1")
-    port = int(os.environ.get("CALIPER_PORT", "8080"))
-    uvicorn.run(app, host=host, port=port)
+    config = CaliperConfig.from_env()
+    configure_logging(config.log_level)
+    try:
+        application = create_app(config=config)
+        application.state.startup()
+    except (ConfigError, MigrationError) as exc:
+        logger.error("Caliper did not start: %s", exc)
+        raise SystemExit(2) from exc
+    logger.info(
+        "Caliper starting on %s:%s with data at %s", config.host, config.port, config.data_dir
+    )
+    uvicorn.run(
+        application,
+        host=config.host,
+        port=config.port,
+        log_config=None,
+        timeout_graceful_shutdown=max(1, int(config.shutdown_grace_seconds)),
+    )

@@ -6,6 +6,7 @@ import threading
 VALID_KINDS = ("feature", "bugfix")
 ACTIVE_STATUSES = ("submitted", "planning", "executing", "reviewing", "awaiting_approval", "merged", "deployed_dev")
 IN_FLIGHT_STATUSES = ("planning", "executing", "reviewing")
+RESUMABLE_STATUSES = ("submitted", "interrupted")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -103,6 +104,11 @@ class RequestStore:
         row = self._conn.execute("SELECT * FROM requests WHERE id = ?", (req_id,)).fetchone()
         return dict(row) if row else None
 
+    def ping(self) -> None:
+        """Readiness probe: prove the SQLite connection answers."""
+        with self._lock:
+            self._conn.execute("SELECT 1").fetchone()
+
     def list_for_project(self, project_id: str) -> list[dict]:
         rows = self._conn.execute(
             "SELECT * FROM requests WHERE project_id = ? ORDER BY CAST(substr(id, 5) AS INTEGER) DESC", (project_id,)
@@ -178,19 +184,36 @@ class RequestStore:
         self._notify("deleted", req)
         return req
 
-    def mark_interrupted(self, reason: str) -> list[dict]:
-        """Turn every in-flight request into a visible failure after a restart."""
+    def mark_interrupted(self, reason: str, status: str = "interrupted",
+                         ids: list[str] | None = None) -> list[dict]:
+        """Turn in-flight requests into a visible, resumable state.
+
+        The process either crashed or received SIGTERM while a run was in
+        progress. ``interrupted`` is deliberately different from ``failed``:
+        no review verdict exists, so the run can be started again from its
+        recorded base commit without pretending that it failed.
+        """
         with self._lock:
-            placeholders = ",".join("?" for _ in IN_FLIGHT_STATUSES)
-            rows = self._conn.execute(
-                f"SELECT * FROM requests WHERE status IN ({placeholders})", IN_FLIGHT_STATUSES
-            ).fetchall()
+            if ids is None:
+                placeholders = ",".join("?" for _ in IN_FLIGHT_STATUSES)
+                rows = self._conn.execute(
+                    f"SELECT * FROM requests WHERE status IN ({placeholders})", IN_FLIGHT_STATUSES
+                ).fetchall()
+            else:
+                if not ids:
+                    return []
+                placeholders = ",".join("?" for _ in ids)
+                rows = self._conn.execute(
+                    f"SELECT * FROM requests WHERE id IN ({placeholders}) AND status IN "
+                    f"({','.join('?' for _ in IN_FLIGHT_STATUSES)})",
+                    (*ids, *IN_FLIGHT_STATUSES),
+                ).fetchall()
             previous = [dict(row) for row in rows]
             if previous:
                 now = _now()
                 self._conn.executemany(
-                    "UPDATE requests SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ?",
-                    [(reason, now, row["id"]) for row in previous],
+                    "UPDATE requests SET status = ?, failure_reason = ?, updated_at = ? WHERE id = ?",
+                    [(status, reason, now, row["id"]) for row in previous],
                 )
                 self._conn.commit()
         for row in previous:

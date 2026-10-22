@@ -77,16 +77,18 @@ ENV_FIELDS = {
 }
 
 
-def test_environment_key_is_generated_in_the_secrets_dir_and_never_in_the_manifest(registry, tmp_path):
+def test_environment_key_is_encrypted_and_only_the_public_key_is_a_file(registry, tmp_path):
     client = _client(registry, tmp_path)
     response = client.post("/api/projects/shop-api/environments/dev/key")
     assert response.status_code == 200
     body = response.json()
     key_path = Path(body["key_path"])
     assert key_path.is_file()
-    assert str(tmp_path / "secrets") in str(key_path)
+    assert key_path.read_text(encoding="utf-8").strip() == body["public_key"]
     assert "PRIVATE KEY" not in body["public_key"]
     assert body["public_key"].startswith("ssh-ed25519")
+    assert registry.secret_store.get("env/shop-api/dev", "ssh_key") == "PRIVATE KEY"
+    assert not (tmp_path / "secrets" / "projects" / "shop-api" / "env_dev").exists()
     # The private key never reaches the manifest.
     manifest = registry.manifest("shop-api")
     assert "PRIVATE KEY" not in str(manifest)
@@ -94,11 +96,13 @@ def test_environment_key_is_generated_in_the_secrets_dir_and_never_in_the_manife
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows does not implement POSIX file modes")
-def test_environment_private_key_is_owner_only(registry, tmp_path):
-    client = _client(registry, tmp_path)
-    body = client.post("/api/projects/shop-api/environments/dev/key").json()
-    mode = stat.S_IMODE(Path(body["key_path"]).stat().st_mode)
-    assert mode == 0o600
+def test_environment_private_key_is_materialized_as_owner_only_then_removed(registry, tmp_path):
+    registry.ensure_environment_key("shop-api", "dev")
+    with registry.environment_key_context("shop-api", "dev") as path:
+        assert path.read_text(encoding="utf-8") == "PRIVATE KEY"
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert str(registry.runtime_dir) in str(path)
+    assert not path.exists()
 
 
 def test_api_returns_the_public_key_and_the_exact_ssh_copy_id_command(registry, tmp_path):

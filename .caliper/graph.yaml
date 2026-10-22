@@ -9,9 +9,77 @@ nodes:
     description: >
       FastAPI HTTP surface and composition root: dashboard, project list/create/detail
       with setup checklist, request composer, request page (plan/diff/review/actions),
-      /health, the run() entrypoint (bind 127.0.0.1:8080 by default), the JSON API under
-      /api for repository access, principles, project docs, environments and project
-      deletion, and GET /api/events (Server-Sent Events).
+      /health plus /health/live and /health/ready, the run() entrypoint (bind
+      127.0.0.1:8080 by default), the JSON API under /api for repository access,
+      principles, project docs, environments and project deletion, and GET
+      /api/events (Server-Sent Events). Startup validates CALIPER_* config, unlocks
+      the secret store, runs the one-way legacy migration and marks in-flight runs
+      interrupted; run() configures JSON stdout logging and graceful SIGTERM
+      shutdown. There is no module-level app.
+  - id: runtime-config
+    path: caliper/config.py
+    kind: infrastructure
+    description: >
+      Runtime configuration from CALIPER_* environment variables, including <NAME>_FILE
+      variants for secret-like settings. Defines the writable /data layout (caliper.db,
+      projects/, work/, secrets/, models.yaml) and the ephemeral runtime directory,
+      creates it with restrictive modes, proves the data and runtime directories are
+      writable, loads/decodes the 32-byte master key and writes a new 0600 key for
+      `python -m caliper init-secrets`. Refuses to start without a valid key.
+  - id: secret-store
+    path: caliper/secrets.py
+    kind: infrastructure
+    description: >
+      Encrypted secret store in secrets/store.sqlite3: AES-256-GCM with a fresh 96-bit
+      nonce per write, scope+name as authenticated data, scopes project/<id>,
+      env/<project>/{dev,prod} and model/{planning,execution,review}. put/get/delete/
+      exists/list(scope)/delete_scope; list returns names only; errors never contain a
+      value. The master key comes from runtime-config and is never stored in the database;
+      a non-secret key-check marker makes a wrong 32-byte key fail startup.
+  - id: secret-materialization
+    path: caliper/secret_files.py
+    kind: infrastructure
+    description: >
+      Short-lived plaintext files for tools that require a path. Writes one decrypted
+      key into CALIPER_RUNTIME_DIR (tmpfs) with mode 0600, yields it for exactly one
+      operation, then overwrites the bytes with zeros and unlinks it on every path.
+      Never writes key material under CALIPER_DATA_DIR; refuses a non-writable runtime
+      directory with a plain reason.
+  - id: legacy-migration
+    path: caliper/migrate.py
+    kind: infrastructure
+    description: >
+      One-way Phase 0c migration: copies .caliper-state/state.sqlite3 after an SQLite
+      integrity check (the legacy file is kept), copies packaged model settings when no
+      data models.yaml exists, and moves plaintext model/deploy/environment keys and
+      known_hosts into the encrypted store and public cache only after a verified read
+      back. A different existing encrypted value or a wrong master key is an error, and
+      reruns are safe; no plaintext is destroyed for a failed item.
+  - id: process-lifecycle
+    path: caliper/lifecycle.py
+    kind: infrastructure
+    description: >
+      Run acceptance and shutdown: tracks active request ids, refuses new runs once
+      shutdown starts, sets the workflow stop event, marks in-flight requests
+      interrupted (resumable, distinct from failed) and waits for a bounded grace
+      period. Startup recovery uses the same interrupted status for rows left in
+      planning/executing/reviewing.
+  - id: logging-setup
+    path: caliper/logging_setup.py
+    kind: infrastructure
+    description: >
+      One JSON stdout handler for Caliper and uvicorn (ts/level/logger/message), plus a
+      redaction filter that replaces registered secret values in messages and
+      exceptions. Caliper never logs request bodies, model prompts, API keys or private
+      keys. Idempotent so an embedding process keeps its own logging configuration.
+  - id: cli
+    path: caliper/cli.py
+    kind: application
+    description: >
+      `python -m caliper` command line: `serve` (default) starts the app through
+      caliper.main.run with optional --host/--port; `init-secrets` writes the master
+      key atomically at 0600 without importing the app or opening the store. Unknown
+      commands exit non-zero.
   - id: workflow-engine
     path: caliper/workflow.py
     kind: domain
@@ -33,13 +101,16 @@ nodes:
       paths and review validation (verdicts must cover exactly the approved rule
       IDs; an invalid review counts as a failed loop and is shown on the request
       page) and takes the rule IDs of the project from its APPROVED principles.
+      A stop event observed at phase boundaries records the request as interrupted
+      (resumable), never as failed.
   - id: request-workspace
     path: caliper/workspace.py
     kind: domain
     description: >
       RequestWorkspaceService: the only place that touches real Git for a request
       after planning. Clones/syncs the project repository, creates one worktree
-      per request under projects/<id>/worktrees/<req> on caliper/<req>, resets it
+      per request under CALIPER_WORK_ROOT (default <data>/work/<project>/<req>) on
+      caliper/<req>, resets it
       to the base commit before every attempt, applies model-produced diffs only
       through patch_safety, stages and computes the authoritative
       `git diff --cached <base>`, validates it, commits with Caliper's identity,
@@ -88,11 +159,12 @@ nodes:
     kind: domain
     description: >
       Loads/validates models.yaml (three roles, provider http|opencode, base_url,
-      model, timeout, executable for opencode roles, keys under
-      CALIPER_SECRETS_DIR created at 0600 in one os.open) and enforces three
-      DISTINCT model ids at startup — the model id is the identity; the provider
-      is only a transport. Blank roles block workflow runs; the factory builds
-      HTTP role adapters backed by the ChatClient or the OpenCodeClient per role
+      model, timeout, executable for opencode roles) from CALIPER_MODELS_CONFIG
+      (default <data>/models.yaml) and enforces three DISTINCT model ids at startup
+      — the model id is the identity; the provider is only a transport. API keys
+      live only in the encrypted secret store under model/<role>; no plaintext key
+      file is written. Blank roles block workflow runs; the factory builds HTTP
+      role adapters backed by the ChatClient or the OpenCodeClient per role
       provider.
   - id: smoke-cli
     path: caliper/smoke.py
@@ -144,12 +216,13 @@ nodes:
     path: caliper/remote.py
     kind: infrastructure
     description: >
-      SSH and key helpers: ed25519 key generation under CALIPER_SECRETS_DIR
-      (mode 600), repository read/write probe (ls-remote plus push --dry-run),
+      SSH and key helpers: ed25519 key generation for a caller-provided path
+      (project-registry generates into the runtime tmpfs and stores the private key
+      encrypted), repository read/write probe (ls-remote plus push --dry-run),
       host key scanning and SHA256 fingerprinting, host key pinning in a
-      per-environment known_hosts file, and the environment probe (ssh true,
-      docker compose version, deploy path exists and writable) that maps every
-      failure to a plain reason with the exact fix command.
+      per-environment known_hosts file under secrets/projects/, and the environment
+      probe (ssh true, docker compose version, deploy path exists and writable) that
+      maps every failure to a plain reason with the exact fix command.
   - id: project-registry
     path: caliper/registry.py
     kind: domain
@@ -158,20 +231,25 @@ nodes:
       manifest.yaml (repo url and its verification, optional product field, the state
       of the six principles, dev/prod environment definitions and host key
       fingerprint), the per-project deploy key, the per-environment SSH keys and
-      known_hosts files, and the repository/environment connection tests. The
-      portable project manifest lives in .caliper/manifest.yaml in the repository.
+      known_hosts files, and the repository/environment connection tests. Private
+      keys are encrypted in the secret store (project/<id>, env/<project>/<env>);
+      public keys are cached under secrets/public/ and only the encrypted-store
+      public key is shown. Key contexts materialize a private key into the runtime
+      tmpfs only for the operation. The portable project manifest lives in
+      .caliper/manifest.yaml in the repository.
   - id: request-store
     path: caliper/state.py
     kind: data-store
     description: >
-      SQLite run state (CALIPER_DB_PATH default .caliper-state/state.sqlite3):
+      SQLite run state (CALIPER_DB_PATH, default <data>/caliper.db):
       request id/kind/text/extra/status/loop_count/review_note plus the Git
       evidence columns branch, worktree, base_commit, commit_sha, diff_hash,
       merge_commit and failure_reason (migrated in place), and append-only
       audit_events. Publishes committed changes to the event bus and supports
-      single-request delete, cancel/restore, delete-in-one-transaction, and
-      mark_interrupted which turns planning/executing/reviewing requests into a
-      visible failure after a restart. Safely deletable.
+      single-request delete, cancel/restore, delete-in-one-transaction, and a
+      ping for readiness. mark_interrupted turns planning/executing/reviewing
+      requests into the resumable interrupted status after a restart. Safely
+      deletable; single-writer by design.
   - id: event-bus
     path: caliper/events.py
     kind: infrastructure
@@ -184,8 +262,9 @@ nodes:
     description: >
       Safe remove-from-Caliper: cancel active requests, optional Dev/Prod stop
       before any deletion, abort on failure, remove only resolved paths under
-      CALIPER_DATA_DIR/projects/<id> and CALIPER_SECRETS_DIR/projects/<id>, then
-      delete DB rows plus audit. Never touches the GitHub repository or .caliper/.
+      CALIPER_DATA_DIR/projects/<id> and CALIPER_DATA_DIR/work/<id>, delete the
+      project/env secret scopes and public-key cache, then delete DB rows plus
+      audit. Never touches the GitHub repository or .caliper/.
   - id: app-ui
     path: caliper/templates
     kind: presentation
@@ -203,8 +282,18 @@ nodes:
     description: >
       Runtime-only project data written by project-registry, request-workspace
       and workflow-engine: one directory per project (manifest, local clone of
-      the repository, worktrees/<req> isolated request worktrees, and req-<n>/
-      artifacts). Not committed; location overridable via CALIPER_PROJECTS_ROOT.
+      the repository, and req-<n>/ artifacts). Request worktrees are separate,
+      under work/<project>/<request> (work-store). Not committed; location
+      overridable via CALIPER_PROJECTS_ROOT.
+  - id: work-store
+    path: work/
+    kind: data-store
+    description: >
+      Disposable request worktrees written by request-workspace, one per
+      project/request under CALIPER_WORK_ROOT (default <data>/work). Confined to
+      this root; project deletion resolves and asserts the path before removing
+      it. Not committed and not a source of truth: Git plus the request evidence
+      columns are.
   - id: tests
     path: tests/
     kind: test-suite
@@ -225,7 +314,11 @@ nodes:
       against a local repository, SSH key and ssh-copy-id command, host key
       pinning and a changed host key), project docs (.caliper
       manifest/graph/decisions Git round trip, invalid graph reporting, docs
-      API/UI, decision authoring, prompt context), safe project deletion and SSE.
+      API/UI, decision authoring, prompt context), safe project deletion and SSE,
+      Phase 1 configuration/master-key handling, the AES-GCM secret store and
+      tmpfs key materialization, legacy SQLite/plaintext migration, health and
+      interrupted shutdown, static container/Compose invariants, and an optional
+      real-container acceptance test gated by CALIPER_CONTAINER_IMAGE.
       Real ssh-keygen and ssh-keyscan tests skip with a reason when the tool is
       absent. Mock role adapters live only here.
 
@@ -374,3 +467,72 @@ edges:
   - from: tests
     to: event-bus
     relation: tests-sse
+  - from: app-core
+    to: runtime-config
+    relation: loads-configuration-from
+  - from: app-core
+    to: secret-store
+    relation: unlocks-at-startup
+  - from: app-core
+    to: legacy-migration
+    relation: migrates-phase-0c-state-through
+  - from: app-core
+    to: process-lifecycle
+    relation: tracks-runs-with
+  - from: app-core
+    to: logging-setup
+    relation: configures-json-logging-with
+  - from: cli
+    to: runtime-config
+    relation: reads-configuration-from
+  - from: cli
+    to: app-core
+    relation: starts-the-server-through
+  - from: secret-materialization
+    to: secret-store
+    relation: reads-values-from
+  - from: project-registry
+    to: secret-store
+    relation: stores-and-reads-encrypted-keys-in
+  - from: project-registry
+    to: secret-materialization
+    relation: materializes-private-keys-with
+  - from: models-config
+    to: secret-store
+    relation: stores-api-keys-in
+  - from: legacy-migration
+    to: secret-store
+    relation: writes-migrated-values-to
+  - from: legacy-migration
+    to: secret-materialization
+    relation: securely-removes-plaintext-with
+  - from: request-workspace
+    to: work-store
+    relation: writes-request-worktrees-under
+  - from: project-deletion
+    to: work-store
+    relation: removes-project-worktrees-from
+  - from: project-deletion
+    to: secret-store
+    relation: deletes-project-secret-scopes-from
+  - from: tests
+    to: runtime-config
+    relation: tests-configuration-and-master-key-handling
+  - from: tests
+    to: secret-store
+    relation: tests-aes-gcm-and-tmpfs-materialization
+  - from: tests
+    to: secret-materialization
+    relation: tests-0600-files-and-secure-unlink
+  - from: tests
+    to: logging-setup
+    relation: tests-json-logs-and-redaction
+  - from: tests
+    to: legacy-migration
+    relation: tests-safe-migration
+  - from: tests
+    to: process-lifecycle
+    relation: tests-health-and-interrupted-shutdown
+  - from: tests
+    to: cli
+    relation: tests-init-secrets-and-serve-dispatch

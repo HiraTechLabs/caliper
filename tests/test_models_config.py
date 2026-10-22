@@ -1,4 +1,3 @@
-import os
 import stat
 
 import pytest
@@ -141,34 +140,27 @@ def test_executable_round_trips_in_models_yaml(tmp_path):
     assert adapters["execution"].client.executable == "/opt/opencode/bin/opencode"
 
 
-def test_secret_files_are_written_without_a_chmod_window(tmp_path, monkeypatch):
+def test_api_keys_are_encrypted_and_never_written_as_plaintext_files(tmp_path):
     settings = _settings(tmp_path)
-    calls = []
+    settings.save(_entries(), keys={"planning": "sk-planning-secret"})
 
-    def forbidden_chmod(*args, **kwargs):
-        calls.append(args)
-        raise AssertionError("secrets must be created with os.open(mode=0o600), not chmod-ed")
+    assert settings.api_key("planning") == "sk-planning-secret"
+    assert settings.has_api_key("planning") is True
+    # The Phase 0c plaintext path is gone.
+    assert not settings.key_path("planning").exists()
+    for path in (settings.path, tmp_path / "secrets" / "store.sqlite3"):
+        assert b"sk-planning-secret" not in path.read_bytes()
+    mode = stat.S_IMODE((tmp_path / "secrets" / "store.sqlite3").stat().st_mode)
+    assert mode == 0o600
 
-    monkeypatch.setattr("caliper.models_config.os.chmod", forbidden_chmod)
 
+def test_clearing_a_key_removes_it_from_the_store(tmp_path):
+    settings = _settings(tmp_path)
     settings.save(_entries(), keys={"planning": "sk-planning"})
+    settings.save(_entries(), clear_keys={"planning": True})
 
-    assert calls == []
-    assert stat.S_IMODE(settings.key_path("planning").stat().st_mode) == 0o600
-    assert settings.api_key("planning") == "sk-planning"
-
-
-def test_an_existing_world_readable_secret_is_tightened_on_save(tmp_path):
-    settings = _settings(tmp_path)
-    settings.secrets_dir.mkdir(parents=True, exist_ok=True)
-    path = settings.key_path("planning")
-    path.write_text("old-key\n", encoding="utf-8")
-    os.chmod(path, 0o644)
-
-    settings.save(_entries(), keys={"planning": "sk-new"})
-
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert settings.api_key("planning") == "sk-new"
+    assert settings.api_key("planning") == ""
+    assert settings.has_api_key("planning") is False
 
 
 def test_timeout_is_validated_and_stored(tmp_path):

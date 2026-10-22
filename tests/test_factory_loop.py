@@ -127,7 +127,7 @@ def test_a_request_is_committed_tested_reviewed_merged_and_pushed(tmp_path):
     parents = _git(remote, "rev-list", "--parents", "-n", "1", "main").stdout.split()
     assert reviewed_commit in parents
     assert not worktree.exists()
-    assert not (tmp_path / "projects" / "shop-api" / "worktrees" / req["id"]).exists()
+    assert not (tmp_path / "work" / "shop-api" / req["id"]).exists()
 
     artifact = workflow.artifact_dir(req["id"]) / "merge-commit.txt"
     assert merged["merge_commit"] in artifact.read_text()
@@ -530,15 +530,16 @@ def test_deleting_a_request_removes_its_worktree_and_branch(tmp_path):
     assert f"caliper/{req['id']}" not in _git(clone, "branch", "--list").stdout
 
 
-def test_a_restart_marks_in_flight_requests_failed(tmp_path):
+def test_a_restart_marks_in_flight_requests_interrupted(tmp_path):
     registry, requests, workflow, _ = make_env(tmp_path)
     req = requests.create("shop-api", "feature", "Add refunds")
     requests.update(req["id"], status="executing")
 
-    create_app(registry=registry, requests=requests, workflow=workflow)
+    with TestClient(create_app(registry=registry, requests=requests, workflow=workflow)):
+        pass
 
     recovered = requests.get(req["id"])
-    assert recovered["status"] == "failed"
+    assert recovered["status"] == "interrupted"
     assert "restarted" in recovered["failure_reason"]
 
 

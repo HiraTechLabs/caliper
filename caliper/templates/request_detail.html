@@ -13,6 +13,8 @@
 
 {% if req.status == 'failed' %}
 <div class="alert danger" data-failed-alert>{% if req.failure_reason %}{{ req.failure_reason }}{% else %}Review failed {{ req.loop_count + 1 }} times. The workflow stopped and needs your call: edit the plan by hand or reject the request.{% endif %}</div>
+{% elif req.status == 'interrupted' %}
+<div class="alert" data-interrupted-alert role="status">{% if req.failure_reason %}{{ req.failure_reason }}{% else %}This run was interrupted. It can be run again from its recorded base commit.{% endif %}</div>
 {% else %}
 <div class="alert danger" data-failed-alert hidden>The workflow stopped. The reason is recorded on the request.</div>
 {% endif %}
@@ -112,11 +114,11 @@
 {% endif %}
 
 <div class="form-actions" data-action-area>
-  {% if req.status == 'submitted' %}
+  {% if req.status in ['submitted', 'interrupted'] %}
     {% if not models_configured %}
     <div class="alert" role="alert">Models are not configured: {{ models_missing|join(', ') }}. <a href="/settings/models">Open Settings &gt; Models</a>.</div>
     {% else %}
-    <form method="post" action="/requests/{{ req.id }}/run"><button class="btn primary" type="submit">Run workflow</button></form>
+    <form method="post" action="/requests/{{ req.id }}/run"><button class="btn primary" type="submit">{{ 'Resume workflow' if req.status == 'interrupted' else 'Run workflow' }}</button></form>
     {% endif %}
   {% elif req.status == 'awaiting_approval' %}
   <form method="post" action="/requests/{{ req.id }}/approve">

@@ -18,19 +18,39 @@ class RepoError(Exception):
 
 
 class GitRepo:
-    """A local clone of one project repository."""
+    """A local clone of one project repository.
 
-    def __init__(self, root: Path, url: str, key_path: Path):
+    ``key_context`` materializes the project's encrypted deploy key only for
+    the duration of one Git command. ``file://`` remotes pass no key at all.
+    """
+
+    def __init__(self, root: Path, url: str, key_path: Path | None = None, key_context=None):
         self.root = Path(root)
         self.url = url
-        self.key_path = Path(key_path)
+        self.key_path = Path(key_path) if key_path is not None else None
+        self.key_context = key_context
 
     @property
     def cloned(self) -> bool:
         return (self.root / ".git").is_dir()
 
+    def run(self, args: list[str], cwd: Path | None = None, timeout: float = 45,
+            max_output: int = 1200) -> tuple[int, str]:
+        """Run one Git command with the deploy key, if one is configured."""
+        if self.key_context is not None:
+            with self.key_context() as key_path:
+                return _run(
+                    ["git", *args], cwd=cwd or self.root, env=_git_env(key_path),
+                    timeout=timeout, max_output=max_output,
+                )
+        env = _git_env(self.key_path) if self.key_path is not None else None
+        return _run(
+            ["git", *args], cwd=cwd or self.root, env=env,
+            timeout=timeout, max_output=max_output,
+        )
+
     def _git(self, args: list[str], cwd: Path | None = None) -> tuple[int, str]:
-        return _run(["git", *args], cwd=cwd or self.root, env=_git_env(self.key_path))
+        return self.run(args, cwd=cwd)
 
     def remote_url(self) -> str:
         try:

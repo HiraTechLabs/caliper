@@ -55,8 +55,14 @@ def test_repository_key_is_generated_in_the_secrets_dir(app):
     body = response.json()
     assert body["public_key"].startswith("ssh-ed25519")
     assert body["key_exists"] is True
-    key_path = tmp_path / "secrets" / "projects" / "shop-api" / "repo_deploy"
-    assert key_path.read_text(encoding="utf-8") == "PRIVATE KEY"
+    public_path = Path(body["key_path"])
+    assert public_path.is_file()
+    assert public_path.read_text(encoding="utf-8").strip() == body["public_key"]
+    assert body["key_mode"] == oct(public_path.stat().st_mode & 0o777)
+    assert "PRIVATE KEY" not in public_path.read_text(encoding="utf-8")
+    # The private key is encrypted in the store, not a plaintext file.
+    assert registry.secret_store.get("project/shop-api", "deploy_key") == "PRIVATE KEY"
+    assert not (tmp_path / "secrets" / "projects" / "shop-api" / "repo_deploy").exists()
     assert registry.manifest("shop-api")["repo"]["key_created_at"]
     assert registry.manifest("shop-api")["repo"]["verified"] is False
 

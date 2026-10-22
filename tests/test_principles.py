@@ -262,8 +262,11 @@ def test_principle_without_a_repository_reports_the_setup_step(app):
 
 def test_principle_without_a_deploy_key_reports_the_setup_step(app):
     client, registry, _ = app
-    registry.deploy_key_path("shop-api").unlink()
-    registry.deploy_key_path("shop-api").with_name("repo_deploy.pub").unlink()
+    registry.secret_store.delete("project/shop-api", "deploy_key")
+    registry.secret_store.delete("project/shop-api", "deploy_key.pub")
+    manifest = registry.manifest("shop-api")
+    manifest["repo"]["url"] = "https://github.com/example/shop-api"
+    registry._write_manifest("shop-api", manifest)
     response = client.get("/api/projects/shop-api/principles")
     assert response.status_code == 200
     assert "deploy key" in response.json()["repo_error"]

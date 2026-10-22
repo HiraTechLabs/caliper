@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 from caliper.patch_safety import PatchError
+from caliper.state import RESUMABLE_STATUSES
 from caliper.workspace import RequestWorkspaceService, WorkspaceError
 
 MAX_LOOPS = 3
@@ -21,6 +22,10 @@ ATTEMPT_ARTIFACTS = (
 
 class WorkflowError(Exception):
     pass
+
+
+class WorkflowInterrupted(WorkflowError):
+    """The process is shutting down; the run stops at a phase boundary."""
 
 
 class ReviewInvalid(WorkflowError):
@@ -83,7 +88,7 @@ def _summarize(text: str, limit: int = 2000) -> str:
 
 class Workflow:
     def __init__(self, requests, registry, artifacts_root: Path, planning=None, execution=None,
-                 review=None, deploy=None, docs=None, workspace=None):
+                 review=None, deploy=None, docs=None, workspace=None, stop_event=None):
         self.requests = requests
         self.registry = registry
         self.artifacts_root = Path(artifacts_root)
@@ -93,6 +98,7 @@ class Workflow:
         self.deploy = deploy
         self.docs = docs
         self.workspace = workspace or RequestWorkspaceService(registry)
+        self.stop_event = stop_event
 
     @property
     def deploy_configured(self) -> bool:
@@ -136,6 +142,19 @@ class Workflow:
         dir.mkdir(parents=True, exist_ok=True)
         (dir / "failure.txt").write_text(reason + "\n", encoding="utf-8")
         return self.requests.update(req_id, status="failed", failure_reason=reason)
+
+    def _check_stop(self) -> None:
+        if self.stop_event is not None and self.stop_event.is_set():
+            raise WorkflowInterrupted(
+                "Caliper is shutting down; this run was interrupted and can be run again."
+            )
+
+    def _mark_interrupted(self, req_id: str) -> dict:
+        dir = self.artifact_dir(req_id)
+        dir.mkdir(parents=True, exist_ok=True)
+        reason = "Caliper is shutting down; this run was interrupted and can be run again."
+        (dir / "interrupted.txt").write_text(reason + "\n", encoding="utf-8")
+        return self.requests.update(req_id, status="interrupted", failure_reason=reason)
 
     def _clear_attempt_artifacts(self, req_id: str) -> None:
         dir = self.artifact_dir(req_id)
@@ -200,17 +219,21 @@ class Workflow:
         req_id = req["id"]
         path = info["worktree"]
         base = info["base_commit"]
+        self._check_stop()
         self._clear_attempt_artifacts(req_id)
         self.requests.update(req_id, status="executing", failure_reason=None, commit_sha=None, diff_hash=None)
 
         self._run_execution(req, project, plan, feedback, info)
+        self._check_stop()
         diff = self.workspace.stage_and_diff(path, base)
         (self.artifact_dir(req_id) / "diff.patch").write_text(diff, encoding="utf-8")
 
         commit = self.workspace.commit(
             path, f"caliper: {req_id} {_summarize(req['text'], 72)}"
         )
+        self._check_stop()
         passed, output = self.workspace.run_tests(path, test_command)
+        self._check_stop()
         dir = self.artifact_dir(req_id)
         (dir / "test-output.txt").write_text(output + "\n", encoding="utf-8")
         (dir / "test-status.txt").write_text(("passed" if passed else "failed") + "\n", encoding="utf-8")
@@ -229,11 +252,13 @@ class Workflow:
     def _review_once(self, req: dict, project: dict, plan: str, rule_ids: list[str],
                      diff: str, test_output: str) -> tuple[dict | None, str | None]:
         dir = self.artifact_dir(req["id"])
+        self._check_stop()
         self.requests.update(req["id"], status="reviewing")
         review = None
         error = None
         try:
             review = self.review.review(req, project, plan, diff, rule_ids, tests=test_output)
+            self._check_stop()
             validate_review(review, rule_ids)
         except ReviewInvalid as exc:
             error = str(exc)
@@ -248,6 +273,7 @@ class Workflow:
         """Execute, test and review until a change passes or the loop limit is reached."""
         req_id = req["id"]
         while True:
+            self._check_stop()
             current = self.requests.get(req_id)
             loops = current["loop_count"]
             info = self._workspace_info(current)
@@ -308,14 +334,17 @@ class Workflow:
             )
 
     def run(self, req_id: str) -> dict:
+        self._check_stop()
         missing = self.missing_models()
         if missing:
             raise WorkflowError("Models are not configured: " + ", ".join(missing) + ". Open Settings > Models.")
         req = self.requests.get(req_id)
         if req is None:
             raise WorkflowError(f"Request '{req_id}' does not exist.")
-        if req["status"] != "submitted":
-            raise WorkflowError(f"Request {req_id} is '{req['status']}', expected 'submitted'.")
+        if req["status"] not in RESUMABLE_STATUSES:
+            raise WorkflowError(
+                f"Request {req_id} is '{req['status']}', expected 'submitted' or 'interrupted'."
+            )
         rule_ids = self.registry.approved_rule_ids(req["project_id"])
         if not rule_ids:
             raise WorkflowError(
@@ -325,12 +354,16 @@ class Workflow:
         dir.mkdir(parents=True, exist_ok=True)
         try:
             info, _test_command = self._prepare(req)
+            self._check_stop()
             project = self._project_context(req["project_id"])
             self.requests.update(req_id, status="planning")
             plan = self.planning.plan(req, project, rule_ids)
             (dir / "plan.md").write_text(plan, encoding="utf-8")
             validate_plan(plan, rule_ids)
             return self._run_loop(req, project, plan, rule_ids)
+        except WorkflowInterrupted:
+            self._mark_interrupted(req_id)
+            raise
         except Exception as exc:
             self._mark_failed(req_id, str(exc) or exc.__class__.__name__)
             raise
@@ -361,6 +394,9 @@ class Workflow:
             project = self._project_context(req["project_id"])
             rule_ids = self.registry.approved_rule_ids(req["project_id"])
             return self._run_loop(req, project, plan, rule_ids, self._feedback(req, None))
+        except WorkflowInterrupted:
+            self._mark_interrupted(req_id)
+            raise
         except Exception as exc:
             self._mark_failed(req_id, str(exc) or exc.__class__.__name__)
             raise

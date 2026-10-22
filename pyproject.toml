@@ -14,6 +14,7 @@ dependencies = [
     "pyyaml",
     "httpx",
     "python-multipart",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]
@@ -23,7 +24,7 @@ dev = [
 ]
 
 [project.scripts]
-caliper = "caliper.main:run"
+caliper = "caliper.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["caliper*"]

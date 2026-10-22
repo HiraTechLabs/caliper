@@ -41,9 +41,9 @@ def setup(tmp_path):
 
 
 def _add_files(registry, tmp_path):
-    project = registry.projects_root / "shop-api"
-    (project / "worktrees" / "req-1").mkdir(parents=True)
-    (project / "worktrees" / "req-1" / "branch.txt").write_text("caliper/req-1", encoding="utf-8")
+    worktree = tmp_path / "work" / "shop-api" / "req-1"
+    worktree.mkdir(parents=True)
+    (worktree / "branch.txt").write_text("caliper/req-1", encoding="utf-8")
     remote = tmp_path / "github" / "shop-api" / ".caliper" / "principles"
     remote.mkdir(parents=True)
     (remote / "security.md").write_text("SEC-001 stays in Git.", encoding="utf-8")
@@ -70,7 +70,9 @@ def test_delete_removes_project_files_requests_and_secrets_and_writes_audit(setu
     assert result["requests"] == 1
     assert result["cancelled_requests"] == [req["id"]]
     assert not (registry.projects_root / "shop-api").exists()
+    assert not (tmp_path / "work" / "shop-api").exists()
     assert not (tmp_path / "secrets" / "projects" / "shop-api").exists()
+    assert registry.secret_store.scopes() == []
     assert requests.list_for_project("shop-api") == []
     assert (remote / "security.md").read_text(encoding="utf-8") == "SEC-001 stays in Git."
 
@@ -127,8 +129,8 @@ def test_undeploy_failure_aborts_and_leaves_everything_intact(setup):
     assert after["status"] == "submitted"
     assert after["updated_at"] == before_updated
     assert (registry.projects_root / "shop-api" / "manifest.yaml").read_text(encoding="utf-8") == before_manifest
-    assert (registry.deploy_key_path("shop-api")).is_file()
-    assert (registry.environment_key_path("shop-api", "dev")).is_file()
+    assert registry.deploy_key_exists("shop-api")
+    assert registry.environment_key_exists("shop-api", "dev")
     assert (remote / "security.md").is_file()
     assert _audit_rows(requests) == []
 
@@ -202,15 +204,27 @@ def test_optional_undeploys_run_and_success_returns_audit(setup):
     calls = []
 
     def stopper(host, user, deploy_path, compose_file, key_path, known_hosts_path=None):
-        calls.append((host, user, deploy_path, compose_file, Path(key_path).name))
+        key = Path(key_path)
+        calls.append({
+            "host": host,
+            "name": key.name,
+            "content": key.read_text(encoding="utf-8"),
+            "mode": key.stat().st_mode & 0o777,
+            "path": key,
+        })
         return "Deployment stopped. Volumes kept."
 
     result = ProjectDeleter(registry, requests, tmp_path, stopper=stopper).delete(
         "shop-api", stop_dev=True, stop_prod=True,
     )
 
-    assert [call[0] for call in calls] == ["dev.example.com", "prod.example.com"]
-    assert [call[4] for call in calls] == ["env_dev", "env_prod"]
+    assert [call["host"] for call in calls] == ["dev.example.com", "prod.example.com"]
+    for call in calls:
+        # Each environment key is materialized only for the operation.
+        assert call["name"].startswith("caliper-secret-")
+        assert call["content"] == "PRIVATE KEY"
+        assert call["mode"] == 0o600
+        assert not call["path"].exists()
     assert result["deployments_stopped"] == ["dev", "prod"]
     assert result["audit_id"] > 0
 

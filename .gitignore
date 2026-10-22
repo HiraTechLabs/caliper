@@ -4,6 +4,9 @@ __pycache__/
 *.egg-info/
 build/
 .venv/
-projects/
+projects
+work
 .caliper-state/
+data/
+secrets/
 node_modules/

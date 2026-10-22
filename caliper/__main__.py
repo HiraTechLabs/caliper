@@ -1,4 +1,6 @@
-from caliper.main import run
+import sys
+
+from caliper.cli import main
 
 if __name__ == "__main__":
-    run()
+    sys.exit(main())

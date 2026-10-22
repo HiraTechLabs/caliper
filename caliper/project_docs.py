@@ -67,13 +67,15 @@ class ProjectDocsService:
             raise ProjectDocsError(
                 "Add a repository URL first. Project docs live in the repository."
             )
-        key_path = self.registry.deploy_key_path(project_id)
-        if not key_path.is_file():
+        key_exists = self.registry.deploy_key_exists(project_id)
+        if not key_exists and not url.startswith("file://"):
             raise ProjectDocsError(
                 "Generate the repository deploy key first, then test read/write access."
             )
         return self._repo_factory(
-            self.registry.project_path(project_id) / "repo", url, key_path
+            self.registry.project_path(project_id) / "repo", url,
+            key_context=None if url.startswith("file://")
+            else (lambda: self.registry.deploy_key_context(project_id)),
         )
 
     def read_cached(self, project_id: str) -> dict:

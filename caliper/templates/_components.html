@@ -53,6 +53,7 @@
     'deployed_dev': ['Merged', 'merged', 'check'],
     'live': ['Live', 'merged', 'check'],
     'failed': ['Failed', 'failed', 'x'],
+    'interrupted': ['Interrupted', 'awaiting', 'list'],
     'cancelled': ['Cancelled', 'neutral', 'x']
   } %}
   {% set item = meta.get(status, [status, 'neutral', 'list']) %}

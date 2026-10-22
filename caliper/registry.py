@@ -3,10 +3,12 @@
 import datetime
 import os
 import re
+import tempfile
 from pathlib import Path
 
 import yaml
 
+from caliper.config import DEFAULT_RUNTIME_DIR, ConfigError, load_master_key
 from caliper.principles import (
     APPROVED,
     PRINCIPLE_ORDER,
@@ -23,6 +25,8 @@ from caliper.remote import (
     test_environment,
     test_repository,
 )
+from caliper.secret_files import materialize
+from caliper.secrets import SecretNotFound, SecretStore, SecretStoreError
 
 ENVIRONMENT_ORDER = ("dev", "prod")
 
@@ -75,14 +79,31 @@ class ProjectRegistry:
         self,
         projects_root: Path,
         secrets_dir: Path | None = None,
+        secret_store: SecretStore | None = None,
         key_generator=None,
         repo_tester=None,
         env_tester=None,
+        runtime_dir: Path | None = None,
+        work_root: Path | None = None,
     ):
         self.projects_root = Path(projects_root)
         self.projects_root.mkdir(parents=True, exist_ok=True)
-        default_secrets = self.projects_root.parent / ".caliper-state" / "secrets"
+        self.work_root = Path(
+            work_root or os.environ.get("CALIPER_WORK_ROOT", self.projects_root.parent / "work")
+        )
+        default_secrets = self.projects_root.parent / "secrets"
         self.secrets_root = Path(secrets_dir or os.environ.get("CALIPER_SECRETS_DIR", default_secrets))
+        if secret_store is None:
+            try:
+                key = load_master_key()
+            except ConfigError:
+                key = None
+            secret_store = SecretStore(self.secrets_root / "store.sqlite3", key)
+        self.secret_store = secret_store
+        self.runtime_dir = Path(
+            runtime_dir or os.environ.get("CALIPER_RUNTIME_DIR", DEFAULT_RUNTIME_DIR)
+        )
+        self.public_root = self.secrets_root / "public"
         self._key_generator = key_generator or generate_ed25519_key
         self._repo_tester = repo_tester or test_repository
         self._env_tester = env_tester or test_environment
@@ -227,34 +248,117 @@ class ProjectRegistry:
         self._write_manifest(project_id, manifest)
         return manifest
 
-    def deploy_key_path(self, project_id: str) -> Path:
-        return self.secrets_root / "projects" / project_id / "repo_deploy"
+    # --- encrypted key material ------------------------------------------------
+    @staticmethod
+    def deploy_scope(project_id: str) -> str:
+        return f"project/{project_id}"
 
-    def environment_key_path(self, project_id: str, env: str) -> Path:
-        if env not in ENVIRONMENT_ORDER:
-            raise ProjectError(f"Unknown environment '{env}'.")
-        return self.secrets_root / "projects" / project_id / f"env_{env}"
+    @staticmethod
+    def environment_scope(project_id: str, env: str) -> str:
+        return f"env/{project_id}/{env}"
 
     def known_hosts_path(self, project_id: str, env: str) -> Path:
         if env not in ENVIRONMENT_ORDER:
             raise ProjectError(f"Unknown environment '{env}'.")
         return self.secrets_root / "projects" / project_id / f"known_hosts_{env}"
 
+    def _public_path(self, project_id: str, filename: str) -> Path:
+        return self.public_root / project_id / filename
+
+    def _write_public(self, path: Path, value: str) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+        fd, temporary = tempfile.mkstemp(prefix=".public-", dir=str(path.parent))
+        try:
+            os.fchmod(fd, 0o644)
+            os.write(fd, (value.strip() + "\n").encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(temporary, path)
+        os.chmod(path, 0o644)
+        return path
+
+    def _generate_pair(self, scope: str, private_name: str, public_name: str, comment: str) -> str:
+        self.runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            os.chmod(self.runtime_dir, 0o700)
+        except OSError:
+            pass
+        with tempfile.TemporaryDirectory(prefix="caliper-key-", dir=str(self.runtime_dir)) as temporary:
+            path = Path(temporary) / "key"
+            public = self._key_generator(path, comment)
+            private_value = path.read_text(encoding="utf-8")
+        if not private_value.strip() or not str(public).strip():
+            raise ProjectError("The key generator returned an empty key pair.")
+        self.secret_store.put(scope, private_name, private_value)
+        self.secret_store.put(scope, public_name, str(public).strip())
+        if not (
+            self.secret_store.get(scope, private_name) == private_value
+            and self.secret_store.get(scope, public_name) == str(public).strip()
+        ):
+            raise ProjectError("The generated key could not be read back from the encrypted store.")
+        return str(public).strip()
+
     def public_deploy_key(self, project_id: str) -> str:
-        path = self.deploy_key_path(project_id).with_name("repo_deploy.pub")
-        return path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+        try:
+            return self.secret_store.get(self.deploy_scope(project_id), "deploy_key.pub").strip()
+        except SecretNotFound:
+            return ""
+        except SecretStoreError:
+            return ""
+
+    def public_deploy_key_path(self, project_id: str) -> Path:
+        return self._public_path(project_id, "repo_deploy.pub")
 
     def public_environment_key(self, project_id: str, env: str) -> str:
-        path = self.environment_key_path(project_id, env).with_name(f"env_{env}.pub")
-        return path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+        try:
+            return self.secret_store.get(self.environment_scope(project_id, env), "ssh_key.pub").strip()
+        except SecretNotFound:
+            return ""
+        except SecretStoreError:
+            return ""
+
+    def public_environment_key_path(self, project_id: str, env: str) -> Path:
+        return self._public_path(project_id, f"env_{env}.pub")
+
+    def deploy_key_context(self, project_id: str):
+        return self._key_context(self.deploy_scope(project_id), "deploy_key")
+
+    def environment_key_context(self, project_id: str, env: str):
+        if env not in ENVIRONMENT_ORDER:
+            raise ProjectError(f"Unknown environment '{env}'.")
+        return self._key_context(self.environment_scope(project_id, env), "ssh_key")
+
+    def _key_context(self, scope: str, name: str):
+        try:
+            return materialize(self.secret_store, scope, name, self.runtime_dir)
+        except SecretStoreError as exc:
+            raise ProjectError(str(exc))
+
+    def deploy_key_exists(self, project_id: str) -> bool:
+        try:
+            return self.secret_store.exists(self.deploy_scope(project_id), "deploy_key")
+        except SecretStoreError:
+            return False
+
+    def environment_key_exists(self, project_id: str, env: str) -> bool:
+        try:
+            return self.secret_store.exists(self.environment_scope(project_id, env), "ssh_key")
+        except SecretStoreError:
+            return False
 
     def ensure_deploy_key(self, project_id: str) -> str:
         manifest = self._read_manifest(project_id)
-        path = self.deploy_key_path(project_id)
-        if not (path.is_file() and path.with_name("repo_deploy.pub").is_file()):
+        if not (
+            self.secret_store.exists(self.deploy_scope(project_id), "deploy_key")
+            and self.secret_store.exists(self.deploy_scope(project_id), "deploy_key.pub")
+        ):
             try:
-                self._key_generator(path, f"caliper-{project_id}")
-            except RemoteError as exc:
+                self._generate_pair(
+                    self.deploy_scope(project_id), "deploy_key", "deploy_key.pub",
+                    f"caliper-{project_id}",
+                )
+            except (RemoteError, SecretStoreError) as exc:
                 raise ProjectError(str(exc))
             manifest["repo"]["key_created_at"] = _now()
             manifest["repo"]["verified"] = False
@@ -262,19 +366,32 @@ class ProjectRegistry:
                 "Key generated. Add the public key to the repository, then test read/write access."
             )
             self._write_manifest(project_id, manifest)
-        return self.public_deploy_key(project_id)
+        public = self.public_deploy_key(project_id)
+        if public:
+            self._write_public(self.public_deploy_key_path(project_id), public)
+        return public
 
     def ensure_environment_key(self, project_id: str, env: str) -> str:
-        path = self.environment_key_path(project_id, env)
-        if not (path.is_file() and path.with_name(f"env_{env}.pub").is_file()):
+        if env not in ENVIRONMENT_ORDER:
+            raise ProjectError(f"Unknown environment '{env}'.")
+        if not (
+            self.secret_store.exists(self.environment_scope(project_id, env), "ssh_key")
+            and self.secret_store.exists(self.environment_scope(project_id, env), "ssh_key.pub")
+        ):
             try:
-                self._key_generator(path, f"caliper-{project_id}-{env}")
-            except RemoteError as exc:
+                self._generate_pair(
+                    self.environment_scope(project_id, env), "ssh_key", "ssh_key.pub",
+                    f"caliper-{project_id}-{env}",
+                )
+            except (RemoteError, SecretStoreError) as exc:
                 raise ProjectError(str(exc))
             manifest = self._read_manifest(project_id)
             manifest["environments"][env]["key_created_at"] = _now()
             self._write_manifest(project_id, manifest)
-        return self.public_environment_key(project_id, env)
+        public = self.public_environment_key(project_id, env)
+        if public:
+            self._write_public(self.public_environment_key_path(project_id, env), public)
+        return public
 
     def save_environment(self, project_id: str, env: str, fields: dict) -> dict:
         if env not in ENVIRONMENT_ORDER:
@@ -313,8 +430,10 @@ class ProjectRegistry:
         if env not in ENVIRONMENT_ORDER:
             raise ProjectError(f"Unknown environment '{env}'.")
         entry = self._read_manifest(project_id)["environments"][env]
-        key_path = self.environment_key_path(project_id, env)
         public_key = self.public_environment_key(project_id, env)
+        public_path = self.public_environment_key_path(project_id, env)
+        if public_key:
+            self._write_public(public_path, public_key)
         host = entry.get("host") or ""
         user = entry.get("user") or ""
         return {
@@ -328,11 +447,12 @@ class ProjectRegistry:
             "verified_at": entry.get("verified_at"),
             "test_message": entry.get("test_message"),
             "public_key": public_key,
-            "key_path": str(key_path),
-            "key_exists": key_path.is_file(),
-            "key_mode": self._key_mode(key_path),
+            "key_path": str(public_path),
+            "key_exists": self.environment_key_exists(project_id, env),
+            "key_mode": self._key_mode(public_path),
+            "private_key_storage": "encrypted secret store; materialized at 0600 only while in use",
             "ssh_copy_id_command": (
-                ssh_copy_id_command(key_path, user, host) if public_key and host and user else None
+                ssh_copy_id_command(public_path, user, host) if public_key and host and user else None
             ),
             "host_key_fingerprint": entry.get("host_key_fingerprint"),
             "host_key_pinned_at": entry.get("host_key_pinned_at"),
@@ -349,14 +469,18 @@ class ProjectRegistry:
         """Everything the API shows for the repository access of a project."""
         manifest = self._read_manifest(project_id)
         repo = manifest["repo"]
-        key_path = self.deploy_key_path(project_id)
+        public_key = self.public_deploy_key(project_id)
+        public_path = self.public_deploy_key_path(project_id)
+        if public_key:
+            self._write_public(public_path, public_key)
         return {
             "url": repo.get("url"),
             "mode": repo.get("mode"),
-            "public_key": self.public_deploy_key(project_id),
-            "key_path": str(key_path),
-            "key_exists": key_path.is_file(),
-            "key_mode": self._key_mode(key_path),
+            "public_key": public_key,
+            "key_path": str(public_path),
+            "key_exists": self.deploy_key_exists(project_id),
+            "key_mode": self._key_mode(public_path),
+            "private_key_storage": "encrypted secret store; materialized at 0600 only while in use",
             "keys_url": repo_keys_url(repo.get("url") or ""),
             "verified": bool(repo.get("verified")),
             "verified_at": repo.get("verified_at"),
@@ -372,13 +496,14 @@ class ProjectRegistry:
             raise ProjectError("Add a repository URL first.")
         try:
             self.ensure_deploy_key(project_id)
-            message = self._repo_tester(repo["url"], self.deploy_key_path(project_id))
+            with self.deploy_key_context(project_id) as key_path:
+                message = self._repo_tester(repo["url"], key_path)
             repo["verified"] = True
             repo["test_message"] = message
             repo["verified_at"] = _now()
             self._write_manifest(project_id, manifest)
             return True, message
-        except (RemoteError, ProjectError) as exc:
+        except (RemoteError, ProjectError, SecretStoreError) as exc:
             repo["verified"] = False
             repo["verified_at"] = None
             repo["test_message"] = str(exc)
@@ -396,14 +521,15 @@ class ProjectRegistry:
                 raise ProjectError(f"Save the {label} first.")
         try:
             self.ensure_environment_key(project_id, env)
-            result = self._env_tester(
-                entry["host"],
-                entry["user"],
-                self.environment_key_path(project_id, env),
-                deploy_path=entry["deploy_path"],
-                compose_file=entry["compose_file"],
-                known_hosts_path=self.known_hosts_path(project_id, env),
-            )
+            with self.environment_key_context(project_id, env) as key_path:
+                result = self._env_tester(
+                    entry["host"],
+                    entry["user"],
+                    key_path,
+                    deploy_path=entry["deploy_path"],
+                    compose_file=entry["compose_file"],
+                    known_hosts_path=self.known_hosts_path(project_id, env),
+                )
             message, fingerprint = self._read_tester_result(result)
             entry["verified"] = True
             entry["test_message"] = message
@@ -413,7 +539,7 @@ class ProjectRegistry:
                 entry["host_key_pinned_at"] = _now()
             self._write_manifest(project_id, manifest)
             return True, message
-        except (RemoteError, ProjectError) as exc:
+        except (RemoteError, ProjectError, SecretStoreError) as exc:
             entry["verified"] = False
             entry["verified_at"] = None
             entry["test_message"] = str(exc)

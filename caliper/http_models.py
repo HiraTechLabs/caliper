@@ -21,16 +21,29 @@ class ChatClient:
             return self._transport(self, content)
         import httpx
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        response = httpx.post(
-            f"{self.base_url}/chat/completions",
-            headers=headers,
-            json={
-                "model": self.model,
-                "messages": [{"role": "user", "content": content}],
-                "temperature": 0.2,
-            },
-            timeout=self.timeout,
-        )
+        try:
+            response = httpx.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": content}],
+                    "temperature": 0.2,
+                },
+                timeout=self.timeout,
+            )
+        except httpx.ConnectError as exc:
+            raise RuntimeError(
+                f"Cannot reach the model endpoint {self.base_url}: connection refused ({exc}). "
+                "Inside a container, 127.0.0.1 is the container itself. Use "
+                "http://ollama:11434/v1 with the compose ollama profile, add "
+                "host.docker.internal with extra_hosts, or use the model host's reachable name."
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise RuntimeError(
+                f"The model endpoint {self.base_url} did not answer within {self.timeout:g} seconds. "
+                "Check that it is running and reachable from Caliper."
+            ) from exc
         response.raise_for_status()
         payload = response.json()
         try:

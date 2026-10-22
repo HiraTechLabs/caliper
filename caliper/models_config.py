@@ -1,12 +1,15 @@
 import os
 import pathlib
+import tempfile
 from pathlib import Path
 
 import yaml
 
+from caliper.config import CaliperConfig, ConfigError, load_master_key
 from caliper.http_models import ChatClient, HTTPExecutionModel, HTTPPlanningModel, HTTPReviewModel
 from caliper.opencode_models import DEFAULT_TIMEOUT as OPENCODE_DEFAULT_TIMEOUT
 from caliper.opencode_models import OpenCodeClient, OpenCodeExecutionModel
+from caliper.secrets import SecretNotFound, SecretStore, SecretStoreError
 
 ROLE_ORDER = ("planning", "execution", "review")
 ROLE_LABELS = {"planning": "Planning", "execution": "Execution", "review": "Review"}
@@ -14,6 +17,8 @@ PROVIDER_ORDER = ("http", "opencode")
 PROVIDER_LABELS = {"http": "OpenAI-compatible HTTP", "opencode": "OpenCode CLI"}
 DEFAULT_MODELS_PATH = Path(__file__).resolve().parent / "models.yaml"
 DEFAULT_TIMEOUT = 600
+MODEL_SCOPE = "model/{role}"
+API_KEY_NAME = "api_key"
 
 
 class ModelsConfigError(Exception):
@@ -157,26 +162,47 @@ def probe_role(role: str, base_url: str, model: str, api_key: str | None = None,
 class ModelsSettings:
     """Persistent global model settings plus API-key secrets.
 
-    Non-secret fields live in models.yaml (CALIPER_MODELS_CONFIG). API keys live
-    under CALIPER_SECRETS_DIR with mode 600 and are never written to YAML.
+    Non-secret fields live in models.yaml (``CALIPER_MODELS_CONFIG``, by default
+    ``CALIPER_DATA_DIR/models.yaml``). API keys are encrypted in the secret
+    store under ``model/<role>`` and are never written to YAML or a plaintext
+    file.
     """
 
-    def __init__(self, path=None, secrets_dir=None):
-        self.path = pathlib.Path(path or os.environ.get("CALIPER_MODELS_CONFIG", DEFAULT_MODELS_PATH))
-        default_secrets = Path(__file__).resolve().parent.parent / ".caliper-state" / "secrets"
-        self.secrets_dir = pathlib.Path(secrets_dir or os.environ.get("CALIPER_SECRETS_DIR", default_secrets))
+    def __init__(self, path=None, secrets_dir=None, store: SecretStore | None = None):
+        config = CaliperConfig.from_env()
+        self.path = pathlib.Path(path or os.environ.get("CALIPER_MODELS_CONFIG", config.models_config))
+        self.secrets_dir = pathlib.Path(
+            secrets_dir or os.environ.get("CALIPER_SECRETS_DIR", config.secrets_dir)
+        )
+        if store is None:
+            try:
+                key = load_master_key()
+            except ConfigError:
+                key = None
+            store = SecretStore(self.secrets_dir / "store.sqlite3", key)
+        self.store = store
 
     def key_path(self, role: str) -> Path:
+        """Legacy Phase 0c plaintext path, used only by the one-way migration."""
         return self.secrets_dir / f"{role}.key"
 
+    @staticmethod
+    def _scope(role: str) -> str:
+        return f"model/{role}"
+
     def api_key(self, role: str) -> str:
-        path = self.key_path(role)
-        if not path.is_file():
-            return ""
         try:
-            return path.read_text(encoding="utf-8").strip()
-        except OSError:
+            return self.store.get(self._scope(role), API_KEY_NAME)
+        except SecretNotFound:
             return ""
+        except SecretStoreError:
+            return ""
+
+    def has_api_key(self, role: str) -> bool:
+        try:
+            return self.store.exists(self._scope(role), API_KEY_NAME)
+        except SecretStoreError:
+            return False
 
     def api_keys(self) -> dict:
         return {role: self.api_key(role) for role in ROLE_ORDER}
@@ -213,18 +239,18 @@ class ModelsSettings:
                 "provider_label": PROVIDER_LABELS.get(provider, provider),
                 "base_url": base_url,
                 "model": model,
-                "has_api_key": self.key_path(role).is_file(),
+                "has_api_key": self.has_api_key(role),
                 "configured": bool(model) and (provider == "opencode" or bool(base_url)),
             }
         return result
 
     def save(self, entries: dict, keys: dict | None = None, clear_keys: dict | None = None) -> dict:
         config = normalize_settings(entries)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
         header = (
             "# Caliper model settings (source of truth for the three roles).\n"
-            "# Edit through Settings > Models. API keys are NOT stored here; they live\n"
-            "# under CALIPER_SECRETS_DIR with mode 600.\n"
+            "# Edit through Settings > Models. API keys are NOT stored here; they are\n"
+            "# encrypted in the Caliper secret store under model/<role>.\n"
             "# The three roles MUST resolve to three different models.\n"
         )
         payload = {
@@ -238,26 +264,31 @@ class ModelsSettings:
             }
             for role in ROLE_ORDER
         }
-        self.path.write_text(header + yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-        self.secrets_dir.mkdir(parents=True, exist_ok=True)
+        self._write_settings(header + yaml.safe_dump(payload, sort_keys=False))
         for role in ROLE_ORDER:
             if (clear_keys or {}).get(role):
-                self.key_path(role).unlink(missing_ok=True)
+                self.store.delete(self._scope(role), API_KEY_NAME)
                 continue
             key = _text((keys or {}).get(role))
             if key:
-                self._write_secret(role, key)
+                self.store.put(self._scope(role), API_KEY_NAME, key)
         return config
 
-    def _write_secret(self, role: str, key: str) -> None:
-        """Create/overwrite the key file with mode 0600 in one step (no chmod window)."""
-        path = self.key_path(role)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    def _write_settings(self, content: str) -> None:
+        """Replace models.yaml atomically; a crash never leaves half a file."""
+        fd, temporary = tempfile.mkstemp(prefix=".models-", dir=str(self.path.parent))
         try:
-            os.fchmod(fd, 0o600)
-            os.write(fd, (key + "\n").encode("utf-8"))
+            os.fchmod(fd, 0o640)
+            os.write(fd, content.encode("utf-8"))
+            os.fsync(fd)
         finally:
             os.close(fd)
+        try:
+            os.replace(temporary, self.path)
+        except OSError:
+            Path(temporary).unlink(missing_ok=True)
+            raise
+        os.chmod(self.path, 0o640)
 
     def make_adapters(self, transports: dict | None = None) -> dict:
         config = self.load()

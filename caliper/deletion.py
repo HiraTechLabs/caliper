@@ -38,6 +38,7 @@ class ProjectDeleter:
 
             try:
                 self._remove_secrets(secrets_dir)
+                self._remove_work(self._safe_work_path(project_id))
                 self._remove_local(project_dir)
                 details = {
                     "removed": {
@@ -89,6 +90,22 @@ class ProjectDeleter:
         if project_dir.exists():
             shutil.rmtree(project_dir)
 
+    def _safe_work_path(self, project_id: str) -> Path:
+        root = Path(self.registry.work_root).resolve()
+        raw = root / project_id
+        if not raw.exists() and not raw.is_symlink():
+            return raw
+        if raw.is_symlink():
+            raise ProjectDeleteError("Refusing to delete: the worktree directory is a symlink.")
+        resolved = raw.resolve()
+        if resolved != (root / project_id).resolve() or root not in resolved.parents:
+            raise ProjectDeleteError("Refusing to delete: the worktree path is outside CALIPER_DATA_DIR/work.")
+        return raw
+
+    def _remove_work(self, work_dir: Path) -> None:
+        if work_dir.exists():
+            shutil.rmtree(work_dir)
+
     def _safe_secrets_path(self, project_id: str) -> Path:
         root = (Path(self.registry.secrets_root) / "projects").resolve()
         raw = root / project_id
@@ -102,8 +119,18 @@ class ProjectDeleter:
         return raw
 
     def _remove_secrets(self, secrets_dir: Path) -> None:
+        project_id = secrets_dir.name
+        for scope in (
+            self.registry.deploy_scope(project_id),
+            self.registry.environment_scope(project_id, "dev"),
+            self.registry.environment_scope(project_id, "prod"),
+        ):
+            self.registry.secret_store.delete_scope(scope)
         if secrets_dir.exists():
             shutil.rmtree(secrets_dir)
+        public_dir = self.registry.public_root / project_id
+        if public_dir.exists():
+            shutil.rmtree(public_dir)
 
     def _stop(self, project_id: str, manifest: dict, env: str) -> None:
         entry = manifest["environments"][env]
@@ -118,16 +145,16 @@ class ProjectDeleter:
             raise ProjectDeleteError(
                 f"The {env.capitalize()} environment is not configured ({', '.join(missing)} missing)."
             )
-        key_path = self.registry.environment_key_path(project_id, env)
-        if not key_path.is_file():
+        if not self.registry.environment_key_exists(project_id, env):
             raise ProjectDeleteError(
                 f"The {env.capitalize()} environment SSH key is missing."
             )
         try:
-            self._stopper(
-                entry["host"], entry["user"], entry["deploy_path"],
-                entry["compose_file"], key_path,
-                self.registry.known_hosts_path(project_id, env),
-            )
+            with self.registry.environment_key_context(project_id, env) as key_path:
+                self._stopper(
+                    entry["host"], entry["user"], entry["deploy_path"],
+                    entry["compose_file"], key_path,
+                    self.registry.known_hosts_path(project_id, env),
+                )
         except Exception as exc:
             raise ProjectDeleteError(f"Could not stop {env.capitalize()}: {exc}") from exc

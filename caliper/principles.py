@@ -172,13 +172,15 @@ class PrinciplesService:
             raise PrinciplesError(
                 "Add a repository URL first. The principle files live in the repository."
             )
-        key_path = self.registry.deploy_key_path(project_id)
-        if not key_path.is_file():
+        key_exists = self.registry.deploy_key_exists(project_id)
+        if not key_exists and not url.startswith("file://"):
             raise PrinciplesError(
                 "Generate the repository deploy key first, then test read/write access."
             )
         return self._repo_factory(
-            self.registry.project_path(project_id) / "repo", url, key_path
+            self.registry.project_path(project_id) / "repo", url,
+            key_context=None if url.startswith("file://")
+            else (lambda: self.registry.deploy_key_context(project_id)),
         )
 
     def _read_repo(self, project_id: str) -> tuple[dict, str | None, str | None]:

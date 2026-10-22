@@ -27,7 +27,7 @@ from caliper.patch_safety import (
     remove_worktree,
     validate_patch,
 )
-from caliper.remote import _git_env, _run
+from caliper.remote import _run
 from caliper.repo import GIT_IDENTITY, GitRepo, RepoError
 
 TEST_TIMEOUT = 900
@@ -54,7 +54,7 @@ class RequestWorkspaceService:
 
     # --- paths and repository -------------------------------------------------
     def worktrees_root(self, project_id: str) -> Path:
-        return self.registry.project_path(project_id) / "worktrees"
+        return Path(self.registry.work_root) / project_id
 
     def worktree_path(self, project_id: str, req_id: str) -> Path:
         return self.worktrees_root(project_id) / req_id
@@ -65,13 +65,18 @@ class RequestWorkspaceService:
         url = (repo.get("url") or "").strip()
         if not url:
             raise WorkspaceError("The project has no repository URL. Add one before running a request.")
-        key_path = self.registry.deploy_key_path(project_id)
         # A file:// remote is a local test/offline repository and does not use SSH.
-        if not key_path.is_file() and not url.startswith("file://"):
+        if url.startswith("file://"):
+            return GitRepo(self.registry.project_path(project_id) / "repo", url)
+        if not self.registry.deploy_key_exists(project_id):
             raise WorkspaceError(
                 "Generate the project's repository deploy key and test read/write access before running a request."
             )
-        return GitRepo(self.registry.project_path(project_id) / "repo", url, key_path)
+        return GitRepo(
+            self.registry.project_path(project_id) / "repo",
+            url,
+            key_context=lambda: self.registry.deploy_key_context(project_id),
+        )
 
     def prepare(self, project_id: str, req_id: str) -> dict:
         """Clone/sync the default branch and create a clean worktree for one request."""
@@ -308,10 +313,8 @@ class RequestWorkspaceService:
                 "The merge was aborted; nothing was pushed."
             )
         merge_commit = _run(["git", "rev-parse", "HEAD"], cwd=repo.root, max_output=200)[1].strip()
-        code, output = _run(
-            ["git", "push", "origin", f"HEAD:refs/heads/{default_branch}"],
-            cwd=repo.root,
-            env=_git_env(repo.key_path),
+        code, output = repo.run(
+            ["push", "origin", f"HEAD:refs/heads/{default_branch}"],
             timeout=180,
             max_output=8000,
         )

@@ -1,0 +1,58 @@
+name: caliper
+
+services:
+  caliper:
+    build:
+      context: .
+      target: runtime
+    image: caliper:phase1
+    restart: unless-stopped
+    ports:
+      # Loopback only: reach the UI through an SSH tunnel (see README).
+      - "127.0.0.1:8080:8080"
+    environment:
+      CALIPER_DATA_DIR: /data
+      CALIPER_RUNTIME_DIR: /run/caliper
+      CALIPER_HOST: 0.0.0.0
+      CALIPER_PORT: "8080"
+      CALIPER_LOG_LEVEL: ${CALIPER_LOG_LEVEL:-INFO}
+      CALIPER_MASTER_KEY_FILE: /run/secrets/caliper_master_key
+    secrets:
+      - caliper_master_key
+    volumes:
+      - caliper-data:/data
+    # Root filesystem is read-only; only /data, /tmp and the runtime tmpfs are writable.
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+      - /run/caliper:mode=0700,uid=10001,gid=10001
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 2g
+    cpus: 2
+    extra_hosts:
+      # Lets a model endpoint on the Docker host be reached as host.docker.internal.
+      - "host.docker.internal:host-gateway"
+
+  # Opt-in local model runtime: docker compose --profile ollama up -d
+  # Caliper reaches it at http://ollama:11434/v1 (never 127.0.0.1 inside a container).
+  ollama:
+    image: ollama/ollama:0.12.6
+    profiles: ["ollama"]
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    # No published port: only the caliper service needs it on the internal network.
+    expose:
+      - "11434"
+
+volumes:
+  caliper-data:
+  ollama-models:
+
+secrets:
+  caliper_master_key:
+    # Create this file with `python -m caliper init-secrets --output secrets/master.key`.
+    file: ${CALIPER_MASTER_KEY_HOST_FILE:-./secrets/master.key}
