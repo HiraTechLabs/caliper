@@ -56,11 +56,8 @@ def validate_plan(plan: str, rule_ids: list[str]) -> None:
         )
 
 
-class MockDeployAdapter:
-    """Stand-in for the SSH/docker deploy adapter. Records the deploy only."""
-
-    def deploy(self, project: dict, env: str, req: dict) -> str:
-        return f"[mock-deploy] {project['id']} -> {env} for {req['id']}"
+class DeploymentNotConfigured(WorkflowError):
+    """No real deploy adapter is configured; Caliper must not fake a deploy."""
 
 
 def failed_rules(review: dict) -> list[str]:
@@ -76,8 +73,12 @@ class Workflow:
         self.planning = planning
         self.execution = execution
         self.review = review
-        self.deploy = deploy or MockDeployAdapter()
+        self.deploy = deploy
         self.docs = docs
+
+    @property
+    def deploy_configured(self) -> bool:
+        return self.deploy is not None
 
     def missing_models(self) -> list[str]:
         labels = {"planning": "Planning", "execution": "Execution", "review": "Review"}
@@ -205,12 +206,21 @@ class Workflow:
 
     def approve_merge(self, req_id: str) -> dict:
         req = self._expect(req_id, "awaiting_approval")
-        project = self.registry.get_project(req["project_id"])
         (self.artifact_dir(req_id) / "merged.marker").write_text("merged with human approval\n", encoding="utf-8")
         self.requests.update(req_id, status="merged")
+        if not self.deploy_configured:
+            return self.requests.get(req_id)
         return self.deploy_dev(req_id)
 
+    def _require_deploy(self) -> None:
+        if not self.deploy_configured:
+            raise DeploymentNotConfigured(
+                "Deployment is not configured. The change is merged, but Dev and Prod deploys "
+                "stay blocked until a deploy adapter is set up."
+            )
+
     def deploy_dev(self, req_id: str) -> dict:
+        self._require_deploy()
         req = self._expect(req_id, "merged", "deployed_dev")
         project = self.registry.get_project(req["project_id"])
         record = self.deploy.deploy(project, "dev", req)
@@ -218,6 +228,7 @@ class Workflow:
         return self.requests.update(req_id, status="deployed_dev")
 
     def approve_prod(self, req_id: str) -> dict:
+        self._require_deploy()
         req = self._expect(req_id, "deployed_dev")
         project = self.registry.get_project(req["project_id"])
         record = self.deploy.deploy(project, "prod", req)

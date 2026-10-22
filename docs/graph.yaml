@@ -23,7 +23,8 @@ nodes:
       re-runs Execution with the human note. Owns artifact paths, review
       validation (verdicts must cover exactly the approved rule IDs; an invalid
       review counts as a failed loop and is shown on the request page) and
-      takes the rule IDs of the project from its APPROVED principles.
+      takes the rule IDs of the project from its APPROVED principles. Applies a
+      merge on approval; Dev/Prod deploys require a real deploy adapter.
   - id: http-model-adapters
     path: caliper/http_models.py
     kind: domain
@@ -73,8 +74,11 @@ nodes:
     path: caliper/workflow.py
     kind: domain
     description: >
-      Deploy adapter interface; MockDeployAdapter records dev/prod deploys.
-      Real SSH/docker adapter deferred until a real environment is reachable.
+      Deploy adapter interface on Workflow, with NO runtime implementation yet.
+      Approval always merges; with no adapter configured, Dev/Prod deploy calls
+      raise DeploymentNotConfigured ("Deployment is not configured") and the UI
+      shows that state instead of faking deployed_dev/live. Test doubles live
+      under tests/. The SSH/docker adapter arrives in Phase 2.
   - id: principles
     path: caliper/principles.py
     kind: domain

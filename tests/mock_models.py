@@ -37,7 +37,18 @@ class MockReviewModel:
         return {"verdicts": verdicts}
 
 
-def mock_workflow(requests, registry, artifacts_root, review=None):
+class RecordingDeployAdapter:
+    """Test double for a real deploy adapter; lives under tests/, never in the app."""
+
+    def __init__(self):
+        self.calls = []
+
+    def deploy(self, project: dict, env: str, req: dict) -> str:
+        self.calls.append((project["id"], env, req["id"]))
+        return f"[test-deploy] {project['id']} -> {env} for {req['id']}"
+
+
+def mock_workflow(requests, registry, artifacts_root, review=None, deploy=None):
     return Workflow(
         requests,
         registry,
@@ -45,4 +56,5 @@ def mock_workflow(requests, registry, artifacts_root, review=None):
         planning=MockPlanningModel(),
         execution=MockExecutionModel(),
         review=review or MockReviewModel(),
+        deploy=deploy,
     )

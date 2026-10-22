@@ -150,5 +150,7 @@ Providers verified against the installed services on this machine: Ollama (OpenA
 HTTP) and OpenCode (`opencode run --format json`). Patch-safety primitives (validation, safe
 git-apply, per-request worktrees) are in place and tested but not yet wired into the
 Execution step (docs/DECISIONS.md D-031).
-Mock adapters exist only under `tests/`. Real SSH/docker deploy and real Git branch/merge are
-still deferred (see docs/DECISIONS.md, D-017).
+Test doubles exist only under `tests/`; the runtime has no mock deploy adapter. Approval always
+merges, and without a real deploy adapter the request page says "Deployment is not configured"
+instead of faking Dev/Prod. Real SSH/docker deploy and real Git branch/merge are still deferred
+(see docs/DECISIONS.md, D-036 and D-017).

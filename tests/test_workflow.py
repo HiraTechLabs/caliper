@@ -1,7 +1,7 @@
 import json
 import pytest
 
-from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel
+from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel, RecordingDeployAdapter
 from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
 from caliper.workflow import MAX_LOOPS, ReviewInvalid, Workflow, WorkflowError, validate_review
@@ -211,6 +211,53 @@ def test_request_changes_re_runs_execution_with_the_human_note(env):
     feedback = execution.feedback_calls[-1]
     assert feedback["human_note"] == "Validate refund input first"
     assert "+Revision: v2" in (workflow.artifact_dir(req["id"]) / "diff.patch").read_text()
+
+
+def test_without_a_deploy_adapter_the_request_is_merged_but_deploy_is_blocked(env):
+    registry, requests, _ = env
+
+    workflow = Workflow(
+        requests, registry, env[2].artifacts_root,
+        planning=MockPlanningModel(), execution=MockExecutionModel(), review=MockReviewModel(),
+    )
+    req = requests.create("shop-api", "feature", "Add refund endpoint")
+    workflow.run(req["id"])
+
+    merged = workflow.approve_merge(req["id"])
+
+    assert merged["status"] == "merged"
+    assert (workflow.artifact_dir(req["id"]) / "merged.marker").is_file()
+    assert not (workflow.artifact_dir(req["id"]) / "deploy-dev.log").exists()
+    assert workflow.deploy_configured is False
+    with pytest.raises(WorkflowError, match="Deployment is not configured"):
+        workflow.deploy_dev(req["id"])
+    with pytest.raises(WorkflowError, match="Deployment is not configured"):
+        workflow.approve_prod(req["id"])
+
+
+def test_a_configured_deploy_adapter_is_used(env):
+    registry, requests, _ = env
+    deploy = RecordingDeployAdapter()
+    workflow = Workflow(
+        requests, registry, env[2].artifacts_root,
+        planning=MockPlanningModel(), execution=MockExecutionModel(), review=MockReviewModel(),
+        deploy=deploy,
+    )
+    req = requests.create("shop-api", "feature", "Add refund endpoint")
+    workflow.run(req["id"])
+
+    dev = workflow.approve_merge(req["id"])
+    live = workflow.approve_prod(req["id"])
+
+    assert dev["status"] == "deployed_dev"
+    assert live["status"] == "live"
+    assert deploy.calls == [("shop-api", "dev", req["id"]), ("shop-api", "prod", req["id"])]
+
+
+def test_the_runtime_has_no_mock_deploy_adapter():
+    import caliper.workflow as workflow_module
+
+    assert not hasattr(workflow_module, "MockDeployAdapter")
 
 
 def test_run_only_from_submitted(env):

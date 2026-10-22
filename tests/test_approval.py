@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from caliper.main import create_app
-from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel
+from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel, RecordingDeployAdapter
 from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
 from caliper.workflow import Workflow
@@ -18,6 +18,7 @@ def setup(tmp_path):
     workflow = Workflow(
         requests, registry, tmp_path / "projects",
         planning=MockPlanningModel(), execution=MockExecutionModel(), review=MockReviewModel(),
+        deploy=RecordingDeployAdapter(),
     )
     client = TestClient(create_app(registry=registry, requests=requests, workflow=workflow))
     return client, tmp_path, requests
@@ -72,6 +73,28 @@ def test_request_changes_requires_note(setup):
     response = client.post("/requests/req-1/changes", data={"note": "  "})
     assert response.status_code == 422
     assert "note is required" in response.text
+
+
+def test_without_a_deploy_adapter_the_page_says_it_is_not_configured(tmp_path):
+    from caliper.main import create_app
+
+    registry = ProjectRegistry(tmp_path / "projects")
+    registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    complete_setup(registry, "shop-api")
+    requests = RequestStore(tmp_path / "state.sqlite3")
+    workflow = Workflow(
+        requests, registry, tmp_path / "projects",
+        planning=MockPlanningModel(), execution=MockExecutionModel(), review=MockReviewModel(),
+    )
+    client = TestClient(create_app(registry=registry, requests=requests, workflow=workflow))
+    _make_awaiting(client)
+
+    response = client.post("/requests/req-1/approve", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert "Deployment is not configured" in response.text
+    assert "Deploy to Prod" not in response.text
+    assert requests.get("req-1")["status"] == "merged"
 
 
 def test_invalid_transitions_rejected_with_guidance(setup):

@@ -115,6 +115,12 @@
       </form>
     </div>
   </details>
+  {% elif req.status == 'merged' %}
+    {% if deploy_configured %}
+    <span class="muted">Merged. Deploying to Dev.</span>
+    {% else %}
+    <div class="alert" role="alert" data-deploy-not-configured>Deployment is not configured. This request is merged; Dev and Prod deploys stay blocked until a deploy adapter is set up.</div>
+    {% endif %}
   {% elif req.status == 'failed' %}
   <span class="muted">This request is stopped. Ask the human to decide (edit plan by hand or reject).</span>
   {% elif req.status == 'live' %}

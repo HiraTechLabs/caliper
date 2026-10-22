@@ -87,6 +87,7 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             "projects": projects,
             "models_configured": workflow.models_configured,
             "models_missing": workflow.missing_models(),
+            "deploy_configured": workflow.deploy_configured,
             "asset_version": _asset_version(),
             **extra,
         }
