@@ -50,6 +50,7 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-041 | 2026-10-22 | `graph-check` is `scripts/graph_check.py` over the graph and decision log | (this) |
 | D-042 | 2026-10-22 | A type check is deferred: mypy reports 9 errors in 5 modules | (this) |
 | D-043 | 2026-10-22 | `.caliper/` is the single home for Caliper's own decisions, graph and manifest | (this) |
+| D-044 | 2026-10-22 | `docs/UI_SYSTEM.md` v2 is the only UI spec; the current Jinja UI is transitional | (this) |
 
 ## Entries
 
@@ -642,3 +643,20 @@ Format: id, date, decision, reason, alternatives rejected.
   fixed, and a sync script is another component to trust); a symlink (fragile on Windows and
   confusing in Git); merging only the decisions and leaving the graph split (the same
   divergence would remain).
+
+### D-044 — `docs/UI_SYSTEM.md` v2 is the only UI spec; the current Jinja UI is transitional
+- **Decision:** The single UI specification is `docs/UI_SYSTEM.md` v2: React + TypeScript +
+  Vite, Tailwind CSS, shadcn/ui, lucide icons and `motion`. The root `UI_SYSTEM.md` copy and
+  the contradictory Jinja2/HTMX version are deleted. The Jinja2 screens with vanilla JS in
+  `caliper/templates` and `caliper/static` remain for now and are explicitly transitional;
+  the React port replaces them. No new Jinja pages are built, and the transitional UI is not
+  claimed to conform to the v2 spec.
+- **Reason:** Two specs contradicted each other on the fundamental stack (server-rendered
+  Jinja + HTMX versus React + shadcn), so "follow UI_SYSTEM.md" had no single meaning. The
+  human confirmed v2 as the target. Keeping the root copy would let the next change read the
+  wrong file. A label on the current UI is needed because AGENTS.md 7 forbids claiming the
+  UI follows a spec it does not implement.
+- **Alternatives rejected:** keeping both specs with a "current versus target" note (the
+  contradiction remains in the repository); deleting the Jinja UI immediately (the Python-
+  only runtime would lose its only UI before the React build exists); porting the UI in this
+  phase (Phase 0b is correctness fixes; the port is a separate step).

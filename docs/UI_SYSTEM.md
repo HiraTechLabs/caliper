@@ -1,122 +1,116 @@
-# UI_SYSTEM.md — Caliper (DRAFT for human approval)
+# UI_SYSTEM.md — Caliper (v2, the only UI spec)
 
-Principle: calm, precise, readable. Like a measuring instrument: little decoration, clear state, one obvious next action.
-English only. Light + dark themes. Server-rendered (Jinja2) + HTMX. No external fonts/CDNs (works offline).
+Status: approved as the target spec on 2026-10-22. The current Jinja2/vanilla-JS UI is transitional and is replaced by this port (D-044). No new Jinja pages are built.
 
-## 1. Tokens
+Stack: React + TypeScript + Vite, Tailwind CSS, shadcn/ui, lucide-react icons. English only. Light and dark themes (follow system, user can override).
+Style: neutral, dense, quiet. Closer to Linear/Vercel dashboards than to a marketing site.
 
-### Color (CSS variables; both themes defined)
-| Token | Light | Dark |
-|---|---|---|
-| `--bg` | #FAFAF9 | #0F1115 |
-| `--surface` | #FFFFFF | #171A21 |
-| `--surface-2` | #F4F4F2 | #1E222B |
-| `--border` | #E5E5E1 | #2A2F3A |
-| `--text` | #1C1C1A | #ECECEA |
-| `--text-muted` | #6B6B66 | #9A9AA3 |
-| `--accent` (primary action only) | #3B5BDB | #7C93FF |
-| `--danger` | #C92A2A | #FF6B6B |
+## 1. Rules
+- Components come from shadcn/ui. Add a component with the shadcn CLI; do not hand-roll what shadcn provides.
+- No emoji anywhere (UI, copy, logs shown to users). Icons are lucide only, 16px inline, 20px in empty states.
+- No filler copy. No greetings, no "Welcome", no explanatory paragraphs. Labels are nouns or verbs. Helper text is one short line and only when the field is not self-evident.
+- One primary button per screen. Everything else is secondary or ghost.
+- Color carries meaning only: state badges and destructive actions. Everything else is neutral.
 
-### Request state colors (always paired with icon + text label, never color alone)
+## 2. Tokens (shadcn theme variables, neutral base)
+- Base color: `neutral` (shadcn). Radius: `0.5rem`. Font: Geist Sans or system-ui (self-hosted, no CDN); mono: Geist Mono or ui-monospace.
+- Type scale: 12 (meta), 14 (body, default), 16 (emphasis), 20 (page title). Weights 400/500/600.
+- Spacing: Tailwind 4px scale. Page max-width 1100px; diff view full width.
+- Borders over shadows. No gradients.
+
+### Request state badges (Badge component, always icon + label)
 | State | Color | Icon |
 |---|---|---|
-| Planning | blue #2563EB | list |
-| Executing | violet #7C3AED | code |
-| Reviewing | cyan #0891B2 | search |
-| Awaiting approval | amber #D97706 | hand (needs you) |
-| Merged / Live | green #16A34A | check |
-| Failed | red #DC2626 | x |
+| Planning | blue | ListTodo |
+| Executing | violet | Code2 |
+| Reviewing | cyan | SearchCheck |
+| Awaiting approval | amber | Hand |
+| Merged / Live | green | CheckCircle2 |
+| Failed | red | XCircle |
 
-### Type
-- Sans: `system-ui, -apple-system, "Segoe UI", sans-serif`. Mono (ids, code, diffs): `ui-monospace, "SF Mono", Menlo, monospace`.
-- Scale: 12 (meta) / 14 (body, default) / 16 (emphasis) / 20 (section title) / 28 (page title). Weights: 400, 500 only.
-- Line height 1.5 body, 1.3 titles.
+## 3. shadcn components used
+Button, Badge, Card, Input, Textarea, Select, Switch, ToggleGroup, Form (react-hook-form + zod), Label, Tabs, Table, Dialog, AlertDialog, Sheet, Tooltip, Sonner (toasts), Skeleton, Separator, Collapsible, ScrollArea, Command (palette), Sidebar, Progress, Alert.
+Custom (built from the above): StatusBadge, Stepper, DiffView, RuleRow, SetupChecklist, SecretField, ConnectionTest.
 
-### Space, shape, motion
-- 4px grid: 4, 8, 12, 16, 24, 32, 48. Page content max-width 960px (diff view up to 1200px).
-- Radius: 8px (cards, inputs, buttons), 999px (status pills).
-- Borders 1px `--border`. No shadows except dialogs. No gradients.
-- Motion: 120–180ms ease for hover/expand; none for state changes that matter. Respect `prefers-reduced-motion`.
+## 4. Layout
+- shadcn Sidebar (collapsible): Dashboard, Projects (list + add), Settings (Models). Theme toggle at the bottom.
+- Page header: title left, primary action right. Content below in Cards or Tables.
+- `Cmd/Ctrl+K` command palette: jump to project, new request. `N` new request. `Esc` closes. `Cmd/Ctrl+Enter` submits.
+- Max 3 clicks to any action.
 
-## 2. Components (the ONLY ones allowed; extend this list via a Decision entry)
-1. **Button**: primary (one per screen, `--accent`), secondary, ghost, danger. Min height 36px. Loading state built in.
-2. **StatusPill**: dot/icon + label, state color.
-3. **Card**: surface + border, 16px padding.
-4. **Stepper**: Plan -> Execute -> Review -> Approve -> Dev -> Prod; current step highlighted; failed step red.
-5. **Field**: label above, helper below, inline error. Text, textarea, select, segmented control, toggle.
-6. **DiffView**: unified diff, mono, line numbers, collapsible files, per-file rule-violation badges.
-7. **RuleRow**: rule ID + title + pass/fail + one-line reason; failed first.
-8. **EmptyState**: icon, one sentence, one action.
-9. **Toast**: bottom-right, auto-dismiss 4s, undo action when relevant.
-10. **ConfirmDialog**: states exact consequence; destructive action is the right button, labeled with the verb.
-11. **Sidebar**: project list, "+ New project", theme toggle.
+## 5. Screens
 
-## 3. Layout
-- Left sidebar 240px (collapsible): projects. Main area: one column.
-- Global shortcuts: `N` new request, `/` search, `Esc` close, `Cmd/Ctrl+Enter` submit forms. Shortcut hints shown in tooltips.
-- Max 3 clicks from Dashboard to any action.
+### Dashboard
+Header: "Dashboard" + `New request`.
+Table sections in order: Needs approval, In progress, Recent. Columns: title, project, StatusBadge, updated (relative). Row click opens the request. If nothing needs approval, the section is hidden (no "all clear" text).
+Setup banner (Alert, only if something is unconfigured): "Models not configured" with a `Configure` link.
 
-## 4. Screens
+### New project (Dialog)
+Fields: Name, GitHub repo URL. Button: `Create`. After creation open the project page.
 
-### 4.1 Dashboard
-```
-Sidebar           | Dashboard                          [ + New request ]
- Projects         |
-  > shop-api      | NEEDS YOU (2)
-  > billing       |  [Awaiting] Add refund endpoint        shop-api   Review ->
-  + New project   |  [Awaiting] Fix rounding bug           billing    Review ->
-                  | IN PROGRESS (1)
-                  |  [Executing] Add audit log   ●●○○○○   shop-api
-                  | RECENT
-                  |  [Live] Fix login redirect   2h ago
-```
-Order: Needs you -> In progress -> Recent. If nothing needs the human, show "All clear".
+### Project page
+Header: name, repo, `New request`.
+Tabs: Requests | Principles | Environments | Decisions | Graph | Settings.
+When setup is incomplete, a SetupChecklist Card sits above the tabs:
+- Repository access: public key (SecretField with copy), link to deploy keys page, `Test connection`.
+- Principles: six rows, each with status (Draft / Approved) and `Edit`.
+- Dev environment, Prod environment: status and `Configure`.
+Each row shows Connected / Not connected with a StatusBadge; failing tests show the exact error and a one-line fix.
 
-### 4.2 Add project (one form, 3 fields)
-```
-New project
- Name            [ shop-api            ]
- Repository      ( ) Create new  ( ) Use existing URL [          ]
- Stack preset    [ Python + FastAPI  v ]
-                                         [ Create project ]
-```
-Principles are pre-filled from the preset (editable later, from the project page). On success go straight to the project page with a prompt: "Make your first request".
+### Project Settings tab, Delete project
+Danger zone Card at the bottom of Settings: `Delete project` (destructive outline button). The sidebar project menu has the same item.
+AlertDialog contents:
+- Title: "Delete {project name}"
+- Will be removed: N requests and their history, local clone and worktrees, deploy key and environment keys.
+- Will stay: the GitHub repository and the `.caliper/` files in it.
+- Switches, off by default: "Stop Dev deployment", "Stop Prod deployment" (Prod switch has an inline warning). Volumes are never deleted.
+- Active requests, if any, are listed with "will be cancelled".
+- Input: type the project name to confirm. Destructive button `Delete project` is enabled only on exact match.
+- On failure (for example an unreachable host while stopping Dev): Alert with the exact error, nothing is deleted, the dialog stays open.
+- On success: toast "Project deleted", navigate to Dashboard. One-line note to remove the deploy key in the repo's GitHub settings.
 
-### 4.3 New request (composer)
-```
- [ Feature | Bug ]                 Project: shop-api v
- +--------------------------------------------------+
- | What do you want?                                |
- |                                                  |
- +--------------------------------------------------+
- + Add error / log / file (optional, collapsed)
-                                        [ Submit  Ctrl+Enter ]
-```
-One box. Nothing else required. After submit, go to the request page showing live progress.
+### Settings > Models
+Three Cards (Planning, Execution, Review). Fields: Base URL, Model, API key. `Test` per card shows latency and a sample response status. Inline error if two roles use the same model.
 
-### 4.4 Request page / approval
-```
- Add refund endpoint        [Awaiting approval]
- Plan > Execute > Review > [Approve] > Dev > Prod
- ----------------------------------------------
- Review: 2 failed, 14 passed
-  FAIL  SEC-003  Input not validated in refund.py:41
-  FAIL  PRF-002  N+1 query in list_refunds
-  (14 passed - show)
- Plan (collapsed)      Changes (3 files, expanded)
- ----------------------------------------------
- [sticky bar]   [ Request changes ]   [ Approve & merge ]
-```
-Failed rules first. "Request changes" opens one text box; the request returns to Execution with that note.
+### New request
+Project select (preselected), ToggleGroup Feature | Bug, Textarea, optional Collapsible for logs/files, `Submit`. If setup is incomplete the button is disabled with a Tooltip naming the missing item.
 
-### 4.5 Project page
-Tabs-free single page: requests list, Principles (6 cards, editable), Docs (manifest, Graph from graph.yaml, Decisions timeline, sync/init/add-decision actions), Environments (Dev/Prod status + last deploy).
+### Request page
+Header: title, StatusBadge. Stepper: Plan, Execute, Review, Approve, Dev, Prod.
+Body: review verdict (RuleRow list, failed first), Plan (Collapsible), Changes (DiffView).
+Sticky footer: `Request changes` (secondary), `Approve and merge` (primary). Request changes opens a Dialog with one Textarea.
+Live progress via SSE, no polling spinners.
 
-## 5. Content rules
-- Sentence case. Verbs on buttons ("Approve & merge", not "OK").
-- Errors: what happened + what to do. Never raw stack traces (offer "Show details").
-- Times relative ("2h ago") with absolute time on hover.
+## 6. States
+- Loading: Skeleton, never a blank page.
+- Empty: icon + one line + one action (e.g. "No requests" + `New request`).
+- Error: Alert with what failed and the next action; `Show details` collapsible for raw output.
+- Destructive: AlertDialog naming the exact consequence; confirm button uses the verb.
 
-## 6. Accessibility
-- Contrast AA minimum. Visible focus ring (2px `--accent`). All actions keyboard reachable.
-- Status never conveyed by color alone.
+## 7. Accessibility
+Keyboard reachable, visible focus ring, AA contrast, state never conveyed by color alone (shadcn defaults satisfy most of this; do not override them).
+
+## 8. Motion
+Library: `motion` (React). Tailwind transitions and `tw-animate-css` (shadcn default) for simple hover/enter states. Motion is for state, not decoration: every animation answers "what just changed" or "what is happening now".
+
+### Budget
+- Durations: 120-200ms for hover/press/toggle, 200-300ms for enter/exit and layout, 600-900ms only for artifact travel along the pipeline.
+- Easing: ease-out for enter, ease-in-out for movement. Layout changes use a spring (stiffness 400, damping 35).
+- Animate `transform` and `opacity` only. Never animate width/height/top/left (exception: the progress bar width).
+- Looping animation only for work in progress: at most one pulsing element per region.
+- `prefers-reduced-motion`: replace movement with instant state change or a 100ms opacity fade; no loops.
+- Motion never blocks input. Nothing waits for an animation to finish before accepting a click.
+
+### Required animations
+1. **Factory floor** (request page header and dashboard row expansion): Planning, Executing, Reviewing, Approval stations in a row, a conveyor lane below. Active station: tinted state color, pulsing ring, progress bar. Completed stations stay tinted with a short result label. Artifacts (plan, diff, verdict) travel along the lane between stations as chips, exactly mirroring files passed through the core. Approval station pulses amber until the human acts, then turns green. Driven by real SSE events, never by timers. Reference: the approved motion preview.
+2. **Status badge:** color crossfade and icon swap (150ms) on state change.
+3. **Lists and tables:** rows enter with fade + 4px rise; moving between sections ("In progress" to "Needs approval") uses a shared layout animation so the row visibly travels. Removed rows collapse.
+4. **Model activity:** streamed Planning/Execution text appears token by token in a mono panel with a blinking caret while active; log lines slide in at the bottom and auto-scroll unless the user scrolled up.
+5. **Review verdict:** rule rows resolve in sequence (40ms stagger): spinner, then check (path draws, 200ms) or x (single 4px horizontal nudge). Failed rows move to the top with a layout animation.
+6. **Deploy:** environment card shows an indeterminate bar while deploying, then a health dot with a slow heartbeat pulse (2s) while healthy; a failed health check turns the dot red and stops pulsing.
+7. **Buttons:** press scale 0.98; async buttons morph into a spinner then a check (150ms each), then return.
+8. **Page and dialog transitions:** pages fade + 4px rise (150ms); dialogs and sheets use shadcn defaults; toasts slide from the bottom-right.
+9. **Loading:** Skeleton shimmer (1.4s), only while data is genuinely loading.
+
+### Not allowed
+Confetti, bouncing icons, parallax, auto-playing decorative backgrounds, animated counters, animation longer than 1s except artifact travel, any animation that repeats when nothing is happening.
