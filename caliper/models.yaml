@@ -1,16 +1,34 @@
 # Caliper model settings (source of truth for the three roles).
 # Edit through Settings > Models. API keys are NOT stored here; they live
 # under CALIPER_SECRETS_DIR with mode 600.
-# The three roles MUST resolve to three different models.
+# The three roles MUST resolve to three different models (model id = identity;
+# the provider is only a transport).
+#
+# provider: http (default)
+#   base_url + model against an OpenAI-compatible /chat/completions endpoint.
+#   Works with a local Ollama (e.g. base_url http://127.0.0.1:11434/v1) or any
+#   remote OpenAI-compatible API; the optional API key lives under
+#   CALIPER_SECRETS_DIR, never here.
+# provider: opencode
+#   Runs the installed CLI: `opencode run --format json --model <model>`.
+#   The model id must be in provider/model form; `opencode models` lists what
+#   is actually available. No base URL and no API key from Caliper: OpenCode
+#   keeps its own credentials. Optional executable (default "opencode").
 
 planning:
+  provider: http
   base_url: ""
   model: ""
+  timeout: 600
 
 execution:
+  provider: http
   base_url: ""
   model: ""
+  timeout: 600
 
 review:
+  provider: http
   base_url: ""
   model: ""
+  timeout: 600

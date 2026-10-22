@@ -18,9 +18,15 @@ HOST_KEY_LINE = f"dev.example.com ssh-ed25519 {HOST_KEY_BLOB}"
 
 
 def _key_generator(path: Path, comment: str) -> str:
+    # Matches the contract of caliper.remote.generate_ed25519_key: the private
+    # key file must end up owner-only (mode 600).
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("PRIVATE KEY", encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
     public = path.with_name(path.name + ".pub")
     public.write_text(f"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI{comment}", encoding="utf-8")
     return public.read_text(encoding="utf-8")

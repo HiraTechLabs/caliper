@@ -159,6 +159,7 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
     def _read_settings_form(form):
         entries = {
             role: {
+                "provider": str(form.get(f"{role}_provider", "http")).strip(),
                 "base_url": str(form.get(f"{role}_base_url", "")),
                 "model": str(form.get(f"{role}_model", "")),
             }
@@ -205,7 +206,9 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
         entry = entries[role]
         key = keys[role] or settings.api_key(role)
         try:
-            reply = probe_model(role, entry["base_url"], entry["model"], key)
+            reply = probe_model(
+                role, entry["base_url"], entry["model"], key, provider=entry["provider"]
+            )
             result = {"role": role, "ok": True, "message": f"Connected. Reply: {reply[:120]}"}
         except Exception as exc:
             result = {"role": role, "ok": False, "message": str(exc)}

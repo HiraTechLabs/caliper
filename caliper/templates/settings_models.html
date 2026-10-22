@@ -6,7 +6,7 @@
   <h1 class="page-title">Settings</h1>
   <span class="pill">Models</span>
 </div>
-<p class="muted">Three roles, three different models. Each role calls an OpenAI-compatible <span class="mono">/chat/completions</span> endpoint.</p>
+<p class="muted">Three roles, three different models. Each role calls an OpenAI-compatible <span class="mono">/chat/completions</span> endpoint or the OpenCode CLI.</p>
 
 {% if saved %}
 <div class="setup-note ok" role="status">Models saved. Requests can run when all three roles are configured.</div>
@@ -38,19 +38,30 @@
       </div>
       <div class="settings-grid">
         <label class="field">
+          <span>Provider</span>
+          <select name="{{ role }}_provider">
+            <option value="http" {% if model.provider != 'opencode' %}selected{% endif %}>OpenAI-compatible HTTP</option>
+            <option value="opencode" {% if model.provider == 'opencode' %}selected{% endif %}>OpenCode CLI</option>
+          </select>
+          <span class="helper">{{ {
+            "http": "Talks directly to an endpoint. A local Ollama works too.",
+            "opencode": "Runs the installed OpenCode CLI with its own credentials and models.",
+          }[model.provider or "http"] }}</span>
+        </label>
+        <label class="field">
           <span>Base URL</span>
-          <input type="url" name="{{ role }}_base_url" value="{{ model.base_url }}" placeholder="http://127.0.0.1:8000/v1" autocomplete="off">
-          <span class="helper">OpenAI-compatible base URL, usually ending in <span class="mono">/v1</span>.</span>
+          <input type="url" name="{{ role }}_base_url" value="{{ model.base_url }}" placeholder="http://127.0.0.1:8000/v1" autocomplete="off" {% if model.provider == 'opencode' %}disabled{% endif %}>
+          <span class="helper">{% if model.provider == 'opencode' %}Not used by the OpenCode CLI.{% else %}OpenAI-compatible base URL, usually ending in <span class="mono">/v1</span>.{% endif %}</span>
         </label>
         <label class="field">
           <span>Model name</span>
-          <input type="text" name="{{ role }}_model" value="{{ model.model }}" placeholder="e.g. qwen3-coder" autocomplete="off">
-          <span class="helper">The exact model id sent to the endpoint.</span>
+          <input type="text" name="{{ role }}_model" value="{{ model.model }}" placeholder="{{ 'e.g. ollama/minimax-m3.1-flash:cloud' if model.provider == 'opencode' else 'e.g. qwen3-coder' }}" autocomplete="off">
+          <span class="helper">{% if model.provider == 'opencode' %}<span class="mono">provider/model</span> form; run <span class="mono">opencode models</span> to list them.{% else %}The exact model id sent to the endpoint.{% endif %}</span>
         </label>
         <label class="field">
           <span>API key</span>
-          <input type="password" name="{{ role }}_api_key" value="" placeholder="{{ '******** saved' if model.has_api_key else 'optional for local runtimes' }}" autocomplete="new-password">
-          <span class="helper">{% if model.has_api_key %}A key is saved. Leave blank to keep it.{% else %}Stored outside the repo and database.{% endif %}</span>
+          <input type="password" name="{{ role }}_api_key" value="" placeholder="{{ '******** saved' if model.has_api_key else ('not used by OpenCode' if model.provider == 'opencode' else 'optional for local runtimes') }}" autocomplete="new-password" {% if model.provider == 'opencode' %}disabled{% endif %}>
+          <span class="helper">{% if model.provider == 'opencode' %}OpenCode keeps its own credentials; Caliper stores nothing here.{% elif model.has_api_key %}A key is saved. Leave blank to keep it.{% else %}Stored outside the repo and database.{% endif %}</span>
         </label>
       </div>
       <div class="settings-card-foot">

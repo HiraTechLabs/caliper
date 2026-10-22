@@ -76,8 +76,21 @@ approval hashes); it is not the portable project manifest.
 ## Models
 
 AI roles are disabled until Settings > Models has three distinct models (Planning, Execution,
-Review) with an OpenAI-compatible base URL and model name. A missing configuration blocks the
-workflow with a link to Settings; there is no runtime mock fallback.
+Review). Each role picks a **provider**:
+
+- **OpenAI-compatible HTTP** (default): a `base_url` ending in `/v1` plus the model id, and an
+  optional API key (stored under `CALIPER_SECRETS_DIR`, never in `models.yaml`). A local Ollama
+  works as-is, for example `http://127.0.0.1:11434/v1` with an installed model id.
+- **OpenCode CLI**: only a model id in `provider/model` form (`opencode models` lists what is
+  installed). Caliper runs `opencode run --format json` with a bounded timeout and never passes
+  `--auto`; OpenCode keeps its own credentials, so no Caliper-stored API key is used.
+
+The model id is the identity: no two roles may resolve to the same model even across providers.
+Check one role against its real backend without secrets:
+
+```
+python -m caliper.smoke planning|execution|review [--timeout N]
+```
 
 ## Remove a project
 
@@ -129,9 +142,13 @@ CI has exactly three jobs (to be wired as they become relevant):
 
 ## Status
 
-The workflow runs end-to-end with configured OpenAI-compatible models: project setup checklist,
+The workflow runs end-to-end with configured real models: project setup checklist,
 request intake, planning/execution/review, review loop with a 3-attempt limit, human approval
 gate -> merge -> Dev -> second gate -> Prod, project docs (manifest/graph/decisions) read from
 the repository and included in model prompts, safe project deletion, and SSE request updates.
+Providers verified against the installed services on this machine: Ollama (OpenAI-compatible
+HTTP) and OpenCode (`opencode run --format json`). Patch-safety primitives (validation, safe
+git-apply, per-request worktrees) are in place and tested but not yet wired into the
+Execution step (docs/DECISIONS.md D-031).
 Mock adapters exist only under `tests/`. Real SSH/docker deploy and real Git branch/merge are
 still deferred (see docs/DECISIONS.md, D-017).

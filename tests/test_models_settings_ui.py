@@ -71,10 +71,11 @@ def test_save_persists_models_and_keys_outside_yaml(tmp_path):
 
 
 def test_test_connection_reports_success_and_failure(tmp_path):
-    def ok_probe(role, base_url, model, api_key):
+    def ok_probe(role, base_url, model, api_key, provider="http"):
+        assert base_url and model
         return "OK"
 
-    def bad_probe(role, base_url, model, api_key):
+    def bad_probe(role, base_url, model, api_key, provider="http"):
         raise RuntimeError("connection refused")
 
     client, *_ = _client(tmp_path, probe=ok_probe)

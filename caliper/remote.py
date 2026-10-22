@@ -16,17 +16,19 @@ class RemoteError(Exception):
     pass
 
 
-def _run(command: list[str], cwd: Path | None = None, env: dict | None = None) -> tuple[int, str]:
+def _run(command: list[str], cwd: Path | None = None, env: dict | None = None, timeout: float = 45,
+         input_text: str | None = None) -> tuple[int, str]:
     try:
         completed = subprocess.run(
             command,
             cwd=str(cwd) if cwd else None,
             env=env,
+            input=input_text,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=45,
+            timeout=timeout,
         )
     except FileNotFoundError as exc:
         return 127, str(exc)

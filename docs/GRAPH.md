@@ -13,10 +13,12 @@ browser
 app-core (FastAPI: dashboard, projects, setup, composer, request page, /api JSON, SSE, /health)
   |  loads at startup                         | delete-project
   v                                           v
-models-config (models.yaml: 3 blank roles)   project-deletion (cancel -> optional stop -> remove -> audit)
-  | builds                                         | stops through
-  +---> http-model-adapters                        v
-  |                                           remote-access (ssh + docker compose)
+models-config (models.yaml: 3 roles, provider http|opencode)   project-deletion (cancel -> optional stop -> remove -> audit)
+  | builds                                            | stops through
+  +---> http-model-adapters (also behind local Ollama)      v
+  +---> opencode-adapter (opencode run --format json)     remote-access (ssh + docker compose)
+  +<-- patch-safety (validate + git apply + worktrees; not yet wired)
+  |
   v
 workflow-engine (plan -> execute -> review -> approve -> dev -> prod)
   | role-calls                    | deploys-through
@@ -37,7 +39,7 @@ project-store (projects/<id>/: manifest, repo clone, req-<n>/ artifacts)   <- wr
 project-registry (manifest, deploy/env keys, principle records, connection tests)
 request-store (SQLite run state + audit events) --publish--> event-bus --> app-core SSE
 app-ui (Jinja2 screens + vanilla JS)
-tests/ — pytest over every node above (130 passing, 1 skipped on Windows)
+tests/ — pytest over every node above (169 passing)
 ```
 
 ## Nodes
@@ -46,8 +48,10 @@ tests/ — pytest over every node above (130 passing, 1 skipped on Windows)
 |---|---|---|---|
 | `app-core` | `caliper/main.py` | application | Composition root + HTTP: dashboard `/`, projects `/projects`, add form, project page + setup checklist, composer (global + per project), request page + run/approve/changes/prod/delete actions, `Settings`/models at startup, `/health`, `run()` entrypoint, the JSON API under `/api` for repository access, principles, project docs, environments, project deletion and request deletion, and `GET /api/events` (SSE). |
 | `workflow-engine` | `caliper/workflow.py` | domain | Synchronous lifecycle: submitted→planning→executing→reviewing→(changes loop ≤3→`failed` for human)→awaiting_approval→approve&merge→`deployed_dev`→approve_prod→`live`. Takes the rule IDs of the project from its **approved** principles; a project without approved rules cannot run. |
-| `http-model-adapters` | `caliper/http_models.py` | domain | OpenAI-compatible HTTP roles with optional bearer key and injectable transport: planner output must cite rule IDs; executor fenced diff; reviewer JSON `{rule_id: {status, reason}}`. |
-| `models-config` | `caliper/models_config.py` | domain | Loads/validates `models.yaml` (3 roles, base_url + model, DISTINCT models, keys under `CALIPER_SECRETS_DIR`) and builds the HTTP role adapters. Blank roles block workflow runs. |
+| `http-model-adapters` | `caliper/http_models.py` | domain | Role adapter classes over any chat client with a `post()` method (provider-agnostic). Default client: OpenAI-compatible HTTP with bearer key and injectable transport — this is how a local Ollama is reached too. Planner output must cite rule IDs; executor fenced diff; reviewer JSON `{rule_id: {status, reason}}`. Disabled by default. |
+| `opencode-adapter` | `caliper/opencode_models.py` | domain | OpenCode CLI client: `opencode run --format json --model <provider/model>` as an argv array (never a shell), bounded timeout, token redaction in errors, plain failures (missing executable, nonzero exit, timeout, empty/malformed output). `--auto` is never passed; OpenCode keeps its own credentials. |
+| `patch-safety` | `caliper/patch_safety.py` | domain | Static patch validation (absolute paths, traversal, backslashes, binary, malformed/empty rejected) and safe application via `git apply --check` then `git apply` (argv, bounded timeout) inside one worktree; per-request isolation on `caliper/<request id>` branches. Primitives only — not yet wired into the workflow (D-031). |
+| `models-config` | `caliper/models_config.py` | domain | Loads/validates `models.yaml` (3 roles: provider http&#124;opencode, base_url, model, timeout; DISTINCT models — the model id is the identity, the provider is only a transport). Builds HTTP role adapters backed by ChatClient or OpenCodeClient per role. Blank roles block workflow runs. |
 | `deploy-adapter` | `caliper/workflow.py` | domain | `MockDeployAdapter` writes deploy logs for dev/prod. Real SSH/docker compose adapter deferred until a real env exists. |
 | `principles` | `caliper/principles.py` | domain | Rule format (`XXX-NNN`), the three states (missing/draft/approved), the starter document (heading + one instruction line, never invented rules) and `PrinciplesService`: reads/writes `.caliper/principles/*.md` in the project repository, records the approval as a content hash + commit, and resets an approved file to Draft when it changes. |
 | `project-docs` | `caliper/project_docs.py` | domain | Reads/writes `.caliper/manifest.yaml`, `.caliper/graph.yaml` and append-only `.caliper/decisions/*.md` in the project repository. Reads the local clone for page loads, syncs on demand, creates only missing docs, validates graph node/edge references, and supplies graph + decisions to model prompts. |
@@ -59,7 +63,7 @@ tests/ — pytest over every node above (130 passing, 1 skipped on Windows)
 | `project-deletion` | `caliper/deletion.py` | domain | Safe "remove from Caliper": cancel active requests, optional Dev/Prod `docker compose down` before any deletion, abort on failure, remove only resolved paths under `CALIPER_DATA_DIR/projects/<id>` and `CALIPER_SECRETS_DIR/projects/<id>`, then delete DB rows + audit. Never touches the GitHub repository or `.caliper/` files. |
 | `app-ui` | `caliper/templates` | presentation | Screens per draft UI_SYSTEM: dashboard, list, add-project, project page with setup checklist/environments/delete dialog and a Docs section (manifest, graph, decisions, sync/init/add decision), request page (stepper, review failed-first, plan, diff, approve gates, request delete confirmation), composer, empty/404/error states, light/dark toggle. Vanilla JS subscribes to SSE and updates request states without reload. |
 | `project-store` | `projects/` | data-store | Runtime project data incl. the local clone of the repository and `req-<n>/` artifacts. Env-overridable; not committed. |
-| `tests` | `tests/` | test-suite | 130 tests across all nodes (unit + UI flows + engine + HTTP adapters via fake transport + settings + repository access + principles against a local Git repository + project docs Git round trip, decision authoring and prompt context + environments with a fake SSH runner + host key pinning + safe project/request deletion + SSE). Mock role adapters live only here. |
+| `tests` | `tests/` | test-suite | 169 tests across all nodes (unit + UI flows + engine + HTTP adapters via fake transport + OpenCode adapter via stub executable/JSON-lines runner + patch safety against real local git repositories + settings incl. per-role providers + repository access + principles against a local Git repository + project docs Git round trip, decision authoring and prompt context + environments with a fake SSH runner + host key pinning + safe project/request deletion + SSE). Mock role adapters live only here. |
 
 ## Key edges (full list lives in graph.yaml)
 
