@@ -321,6 +321,14 @@ nodes:
       real-container acceptance test gated by CALIPER_CONTAINER_IMAGE.
       Real ssh-keygen and ssh-keyscan tests skip with a reason when the tool is
       absent. Mock role adapters live only here.
+  - id: work-reporting
+    path: docs/
+    kind: presentation
+    description: >
+      Human-facing, append-only evidence for Caliper's own work. docs/WORK_LOG.md
+      records each task's milestones, actual results, failures and next step;
+      docs/reports/<task>.md is the canonical detailed report. Terminal responses
+      point here. This is process documentation, not runtime code or project state.
 
 edges:
   - from: app-core
@@ -536,3 +544,6 @@ edges:
   - from: tests
     to: cli
     relation: tests-init-secrets-and-serve-dispatch
+  - from: tests
+    to: work-reporting
+    relation: supplies-verification-evidence-recorded-in

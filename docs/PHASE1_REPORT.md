@@ -1,5 +1,12 @@
 # Report — Phase 1: container foundation and encrypted secret store
 
+> **Audit note (2026-10-22):** this is the historical working report. The canonical,
+> evidence-audited report is
+> [`reports/phase1-container-secret-store.md`](reports/phase1-container-secret-store.md).
+> Its claims were rechecked against a fresh isolated Compose project and recorded with exact
+> commands and results there. This historical file is preserved; the canonical file is
+> authoritative.
+
 Date: 2026-10-22
 Branch: `feature/phase1-container-secret-store`
 Phase 1 commit: `9b7be48` (`Phase 1: Container Foundation and Secret Store`)

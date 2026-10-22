@@ -185,3 +185,23 @@ Caliper's first real workload is COS, a product made of several interlinked apps
 - Environments: Caliper stores no passwords. It generates one ed25519 key per environment, shows the public key and the exact `ssh-copy-id -i <key path> <user>@<host>` command (the human uses their own password once, outside Caliper). Host key is pinned on first successful connection, its fingerprint is shown, and a later change fails loudly.
 - Test connection uses `BatchMode`, checks `ssh <host> true`, `docker compose version`, and that the deploy path exists and is writable. Failures map to plain-language reasons with the exact fix command.
 - Model usage: record tokens and cost per role per request and show them on the request page. Settings > Models supports an agent-CLI adapter type for Execution later; not before the chat-completions adapters work end to end.
+
+## 13. File-based reporting (permanent)
+Every task — implementation, audit, correction, or investigation — leaves a durable Markdown record
+in the repository, not only in the terminal. This rule applies from 2026-10-22 onward.
+
+1. **Append to `docs/WORK_LOG.md`.** Add an entry when the task starts, after each meaningful
+   milestone, and before handoff. Never overwrite or delete earlier entries; the log is append-only.
+2. **Write the canonical report to `docs/reports/<task-slug>.md`.** It records the objective,
+   scope, exact commands, actual results, failures, limitations, and the next step. For an audit,
+   every acceptance criterion has its own evidence and status. Historical reports stay in place;
+   add a pointer to the canonical report instead of silently rewriting history.
+3. **Keep the terminal short.** Print the overall status and the paths to the report and work log.
+   Long command output belongs in the files, not in the terminal response.
+4. **Evidence, not expectations.** Mark a criterion PASS only when the recorded command and actual
+   result support it; otherwise use FAIL, BLOCKED, or NOT RUN with a reason. Never invent output,
+   present expected output as actual output, or remove a failure from the record.
+5. **No unresolved placeholders.** A task is not complete while its report contains TODO markers
+   or an acceptance item without evidence.
+6. **Same commit.** Record the reporting-system decision in `.caliper/DECISIONS.md` and update
+   `.caliper/graph.yaml` and `.caliper/GRAPH.md` in the same commit as the structural change.

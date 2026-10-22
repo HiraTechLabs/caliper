@@ -74,6 +74,7 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-065 | 2026-10-22 | Model settings live in `/data/models.yaml` and API keys in the encrypted store | (this) |
 | D-066 | 2026-10-22 | Caliper is single-instance by design until a later Postgres split | (this) |
 | D-067 | 2026-10-22 | The secret store verifies the master key at startup, before readiness | (this) |
+| D-068 | 2026-10-22 | Every task records its evidence in `docs/WORK_LOG.md` and a canonical `docs/reports/` file | (this) |
 
 ## Entries
 
@@ -1053,3 +1054,19 @@ Format: id, date, decision, reason, alternatives rejected.
   passes); decrypting an arbitrary real secret at startup (adds no new information and leaks which
   scope is used); storing a plain hash of the key (offline guesses become cheaper than against
   AES-GCM ciphertext).
+
+### D-068 — Every task records its evidence in the work log and a canonical report
+- **Decision:** `docs/WORK_LOG.md` is append-only and records each task's milestones, actual
+  verification results, failures and next step. Each task also has a canonical detailed file under
+  `docs/reports/<task-slug>.md`; historical reports remain in place with a pointer to the
+  canonical one. The terminal response is a short status plus those paths. A report marks an
+  acceptance item PASS only when the exact command and actual result are recorded; otherwise it
+  uses FAIL, BLOCKED, or NOT RUN. `AGENTS.md` section 13 makes this permanent.
+- **Reason:** the previous Phase 1 handoff put detailed evidence only in a terminal and a mutable
+  report, so an audit could not reliably tell which claims had been run, with which setup, or what
+  had failed. Durable files make the evidence reviewable after the session and force failures to
+  stay visible instead of disappearing from a summary.
+- **Alternatives rejected:** chat-only summaries (lost with the session); one mutable report that
+  overwrites earlier evidence (destroys history); CI logs alone (not available for local audits
+  and not a readable task narrative); generated placeholder reports (encourage claiming results
+  before running them).

@@ -4,7 +4,7 @@
 The CI `graph-check` job fails if a node path or an edge references a missing component, if a
 `caliper/` module has no node, or if the decision index and entries disagree.
 
-## Snapshot (container foundation, encrypted secrets, real factory loop)
+## Snapshot (container foundation, encrypted secrets, real factory loop, file-based reporting)
 
 ```
 browser
@@ -42,6 +42,10 @@ app-ui (Jinja2 screens + vanilla JS)
 cli (`python -m caliper serve|init-secrets`)
 tests/ — pytest over every node above, including real temporary Git remotes and a gated
          real-container acceptance test
+  |
+  | actual results recorded in
+  v
+work-reporting (docs/WORK_LOG.md append-only; docs/reports/<task>.md canonical)
 ```
 
 ## Nodes
@@ -76,6 +80,7 @@ tests/ — pytest over every node above, including real temporary Git remotes an
 | `project-store` | `projects/` | data-store | Runtime project data: the local clone of the repository and `req-<n>/` artifacts. Worktrees are separate under `work-store`. Env-overridable; not committed. |
 | `work-store` | `work/` | data-store | Disposable request worktrees, one per project/request under `CALIPER_WORK_ROOT` (default `<data>/work`). Confined to this root; project deletion resolves and asserts the path before removal. Not committed and not a source of truth. |
 | `tests` | `tests/` | test-suite | Tests across all nodes (unit + UI flows + engine + HTTP adapters via fake transport + OpenCode adapter via stub executable/JSON-lines runner + patch safety against real local git repositories + **the real factory loop against temporary bare Git remotes**: worktree commit, test gate, authoritative diff review, approval binding, real merge/push, unsafe diffs, conflict, push rejection, OpenCode worktree edits, an HTTP adapter round trip against a real local HTTP model endpoint, interruption recovery + settings incl. per-role providers + repository access + principles against a local Git repository + project docs Git round trip, decision authoring and prompt context + environments with a fake SSH runner + host key pinning + safe project/request deletion + SSE + Phase 1 config/master-key + AES-GCM store/tmpfs materialization + legacy migration + health/interrupted shutdown + static container/Compose invariants). The real-container acceptance test is gated by `CALIPER_CONTAINER_IMAGE`. Real ssh-keygen/ssh-keyscan tests skip with a reason when the tool is absent. Test doubles (role adapters, deploy adapter) live only here. |
+| `work-reporting` | `docs/` | presentation | Human-facing, append-only evidence for Caliper's own work. `docs/WORK_LOG.md` records each task's milestones, actual results, failures and next step; `docs/reports/<task>.md` is the canonical detailed report. Terminal responses point here. Process documentation, not runtime code or project state. |
 
 ## Key edges (full list lives in graph.yaml)
 
@@ -98,4 +103,5 @@ runtime manifest, and uses `remote-access` for the keys and the connection tests
 audit event. `app-ui` displays data from the registry, request store and project docs, and
 subscribes to SSE. `tests` cover everything, including the real factory loop against temporary
 Git remotes, the Phase 1 container/secret path, and the only test doubles (role and deploy
-adapters).
+adapters); their actual results are recorded in `work-reporting` (`docs/WORK_LOG.md` and
+`docs/reports/<task>.md`).
