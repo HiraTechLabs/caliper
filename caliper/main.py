@@ -14,9 +14,9 @@ from fastapi.templating import Jinja2Templates
 
 from caliper.deletion import ProjectDeleteError, ProjectDeleter
 from caliper.events import EventBus
+from caliper.models_config import ROLE_ORDER, ModelsConfigError, ModelsSettings, probe_role
 from caliper.principles import PrinciplesError, PrinciplesService
 from caliper.project_docs import ProjectDocsError, ProjectDocsService
-from caliper.models_config import ROLE_ORDER, ModelsConfigError, ModelsSettings, probe_role
 from caliper.registry import ENVIRONMENT_ORDER, ProjectError, ProjectRegistry
 from caliper.state import ACTIVE_STATUSES, IN_FLIGHT_STATUSES, VALID_KINDS, RequestStore
 

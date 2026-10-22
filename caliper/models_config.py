@@ -5,7 +5,8 @@ from pathlib import Path
 import yaml
 
 from caliper.http_models import ChatClient, HTTPExecutionModel, HTTPPlanningModel, HTTPReviewModel
-from caliper.opencode_models import DEFAULT_TIMEOUT as OPENCODE_DEFAULT_TIMEOUT, OpenCodeClient
+from caliper.opencode_models import DEFAULT_TIMEOUT as OPENCODE_DEFAULT_TIMEOUT
+from caliper.opencode_models import OpenCodeClient
 
 ROLE_ORDER = ("planning", "execution", "review")
 ROLE_LABELS = {"planning": "Planning", "execution": "Execution", "review": "Review"}

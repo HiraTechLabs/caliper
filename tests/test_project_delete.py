@@ -10,7 +10,6 @@ from caliper.main import create_app
 from caliper.registry import ProjectError, ProjectRegistry
 from caliper.remote import RemoteError
 from caliper.state import RequestStore
-
 from tests.support import complete_setup
 
 

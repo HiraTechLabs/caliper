@@ -134,11 +134,14 @@ tests/       tests (registry behavior, UI flows, smoke)
 
 ## CI
 
-CI has exactly three jobs (to be wired as they become relevant):
+CI has exactly three jobs in `.github/workflows/ci.yml`:
 
-- `test` — full suite.
-- `lint` — style + type checks.
-- `graph-check` — graph/log consistency.
+- `test` — installs the package into a clean virtualenv and runs the full pytest suite
+  (unit tests plus the clean-install end-to-end test).
+- `lint` — runs `ruff` 0.17.1 over `caliper/`, `tests/` and `scripts/`.
+- `graph-check` — runs `scripts/graph_check.py`: graph paths and edges, every `caliper/`
+  module represented, decision index/entry agreement, and on pull requests that code
+  changes also update the decision log and the graph.
 
 ## Status
 

@@ -3,7 +3,6 @@ import stat
 import pytest
 
 from caliper.remote import RemoteError, generate_ed25519_key, scan_host_key
-
 from tests.support import requires_ssh_keygen, requires_ssh_keyscan
 
 

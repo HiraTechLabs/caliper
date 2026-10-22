@@ -1,6 +1,6 @@
 import json
 
-from caliper.workflow import ReviewInvalid, validate_plan, validate_review, WorkflowError
+from caliper.workflow import ReviewInvalid, WorkflowError, validate_plan, validate_review
 
 
 class ChatClient:

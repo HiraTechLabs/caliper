@@ -205,7 +205,7 @@ class Workflow:
         return self._review_until_done(req, project, plan, rule_ids, diff)
 
     def approve_merge(self, req_id: str) -> dict:
-        req = self._expect(req_id, "awaiting_approval")
+        self._expect(req_id, "awaiting_approval")
         (self.artifact_dir(req_id) / "merged.marker").write_text("merged with human approval\n", encoding="utf-8")
         self.requests.update(req_id, status="merged")
         if not self.deploy_configured:

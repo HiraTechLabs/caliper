@@ -13,7 +13,7 @@ failure. This exercises the real endpoint, so use it as a smoke test only.
 import argparse
 import sys
 
-from caliper.models_config import ModelsSettings, ROLE_LABELS, ROLE_ORDER, probe_role
+from caliper.models_config import ROLE_LABELS, ROLE_ORDER, ModelsSettings, probe_role
 
 
 def main(argv=None) -> int:

@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from caliper.registry import ProjectRegistry
 from caliper.main import create_app
+from caliper.registry import ProjectRegistry
 
 
 @pytest.fixture()

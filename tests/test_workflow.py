@@ -1,10 +1,11 @@
 import json
+
 import pytest
 
-from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel, RecordingDeployAdapter
 from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
 from caliper.workflow import MAX_LOOPS, ReviewInvalid, Workflow, WorkflowError, validate_review
+from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel, RecordingDeployAdapter
 from tests.support import approve_principles
 
 
