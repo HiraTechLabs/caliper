@@ -21,8 +21,9 @@ Repo state (verified from an archive of the working tree, branch `feature/openco
 - Review validation checks structure only: it does not require a verdict for every approved rule ID, so a review with one passing rule approves everything. The planner check is a prefix search ("SEC-", "ARC-"...), not a check against the approved IDs.
 - `httpx` and `python-multipart` are needed at runtime but missing from `dependencies` in `pyproject.toml`.
 - `ModelsSettings.save()` drops the `executable` field; API keys are plaintext files written then chmod-ed.
-- Frontend is still Jinja2 + static JS (two `app.js` copies); every file uses CRLF line endings (git shows the whole tree modified).
-- 161 tests pass; 8 in `tests/test_environments.py` fail wherever `ssh-keyscan` is not installed (tests depend on host tools).
+- Frontend is still Jinja2 + vanilla JS bundled with esbuild (`caliper/static/js/app.js` is the source, `caliper/static/app.js` the committed bundle). No React/Tailwind/shadcn yet. Line endings are LF (a CRLF impression came from a Windows-made archive); `.gitattributes` is missing.
+- `main` is 1 commit behind `origin/main` and fails 1 test (private key fixture mode 0644 vs 0600) that the feature branch fixes. Feature branch: 169 tests pass. 8 environment tests fail wherever `ssh-keyscan` is missing.
+- No CI exists (no `.github/`), although AGENTS.md section 8 requires three jobs. `node_modules/` is committed (about 1000 tracked files). Self-documentation is duplicated and diverged: `docs/{DECISIONS,GRAPH,graph}` vs `.caliper/{DECISIONS,GRAPH,graph}`; root `UI_SYSTEM.md` and `docs/UI_SYSTEM.md` contradict each other.
 - Good and to be kept: repo-backed principles with states, per-environment keys with host-key pinning, project docs in `.caliper/`, safe deletion, SSE updates, the decision log (D-001..D-031), the OpenCode adapter design (no shell, no `--auto`, redaction).
 
 ## 1. Rules for this plan
@@ -39,13 +40,9 @@ Reason: a factory that cannot yet run one real change end to end cannot produce 
 
 ---
 
-## 2. Phase 0 — Verify (no code changes)
+## 2. Phase 0 — Verify (DONE)
 
-The audit above was done from an archive. Re-verify it against the live repo and write `docs/AUDIT.md` (short):
-1. For each branch: last commit, ahead/behind relative to `main`, `pytest` result.
-2. Confirm or correct each finding in section 0. Add anything missed (AGENTS.md violations, secrets in plaintext, steps implemented out of order).
-3. Recommend how to land `feature/opencode-ollama-adapters` on `main` (it and `main` have diverged: `main` has the `.caliper/manifest.yaml` and `.caliper/decisions/README.md` commit). Do NOT merge.
-Acceptance: file committed; human approves the merge plan.
+Completed in `docs/AUDIT.md` (all section 0 findings confirmed; corrections folded into section 0 above). Remaining step before Phase 0b: land `feature/opencode-ollama-adapters` on `main` as recommended in the audit (fast-forward local `main` to `origin/main`, then `git merge --no-ff` the feature branch, push, run `pytest`; expect 169 passed). No Phase 0b fixes are bundled into that merge.
 
 ---
 
@@ -56,7 +53,11 @@ Acceptance: file committed; human approves the merge plan.
 3. **Dependencies.** Add `httpx` and `python-multipart` to runtime `dependencies`. Add a test that installs the package into a clean virtualenv and starts the app, handles one form POST, and makes one HTTP model call against a local server.
 4. **Settings.** Persist the `executable` field in `models.yaml` (round-trip test). Create secret files atomically with mode 0600 (`os.open` with mode), not write-then-chmod.
 5. **Mock removal.** Delete `MockDeployAdapter` from `caliper/workflow.py`. `Workflow` requires a real deploy adapter; with none configured, approve/deploy returns a clear blocked state ("Deployment is not configured"). Test fakes live under `tests/`. Record a Decision resolving the contradiction between D-016/D-017 and D-022.
-6. **Hygiene.** Add `.gitattributes` (`* text=auto eol=lf`) and normalize line endings in one dedicated commit. Remove whichever of `caliper/static/app.js` and `caliper/static/js/app.js` is unused (Decision). Mark tests that need `ssh`/`ssh-keyscan` with a skip that says why when the tool is missing.
+6. **Repository hygiene.** Add `.gitattributes` (`* text=auto eol=lf`). Remove `node_modules/` from Git (`git rm -r --cached node_modules`, add to `.gitignore`; keep `package.json` and the lockfile) and record a Decision on whether the esbuild bundle `caliper/static/app.js` stays committed or is built at install time. Mark tests that need `ssh`/`ssh-keyscan` with a skip that says why when the tool is missing.
+7. **CI.** Add `.github/workflows/ci.yml` with exactly the three jobs from AGENTS.md section 8: `test` (clean virtualenv install of the package, then `pytest`), `lint` (style + type checks; choose and record the tools), `graph-check` (graph file consistent with the code and decisions updated). Decision entry for each tool.
+8. **One home for self-documentation.** Recommended: `.caliper/` is authoritative for Caliper's own decisions, graph, and manifest (it is what Caliper reads into prompts); `docs/` keeps only human-facing documents (UI_SYSTEM, AUDIT, PLAN, README material). Merge the diverged copies (for example D-031 exists only in `docs/DECISIONS.md`, `docs/GRAPH.md` has 18 nodes vs 16), delete the duplicates, point `graph-check` at the surviving files, and amend AGENTS.md section 5 accordingly. Do this only after the human confirms the choice.
+9. **UI system.** Keep a single `docs/UI_SYSTEM.md`: the v2 spec (React + shadcn/ui + Tailwind, motion). Remove the root copy and the contradictory Jinja/HTMX version. Add a Decision noting that the current Jinja UI is a transitional stack that the frontend port replaces. Do not build new Jinja pages.
+10. **Graph accuracy.** Update `graph.yaml` descriptions that claim behavior the code lacks (review validation, deploy adapter) so they state the current truth; they change again when 0b/0c land.
 
 Acceptance: full suite green; each fix has a test that failed before the fix.
 
