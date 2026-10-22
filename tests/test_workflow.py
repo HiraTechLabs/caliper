@@ -4,7 +4,7 @@ import pytest
 from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel
 from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
-from caliper.workflow import MAX_LOOPS, Workflow, WorkflowError, validate_review
+from caliper.workflow import MAX_LOOPS, ReviewInvalid, Workflow, WorkflowError, validate_review
 from tests.support import approve_principles
 
 
@@ -86,13 +86,78 @@ def test_run_attaches_the_project_docs_to_the_model_context(env):
 
 
 def test_review_validates_per_rule_output(env):
-    validate_review({"verdicts": {"SEC-001": {"status": "pass", "reason": "ok"}}})
+    ok = {"verdicts": {"SEC-001": {"status": "pass", "reason": "ok"}}}
+    validate_review(ok, ["SEC-001"])
     with pytest.raises(WorkflowError, match="verdicts"):
-        validate_review({"hello": {}})
+        validate_review({"hello": {}}, ["SEC-001"])
     with pytest.raises(WorkflowError, match="pass or fail"):
-        validate_review({"verdicts": {"SEC-001": {"status": "maybe", "reason": "x"}}})
+        validate_review({"verdicts": {"SEC-001": {"status": "maybe", "reason": "x"}}}, ["SEC-001"])
     with pytest.raises(WorkflowError, match="status/reason"):
-        validate_review({"verdicts": {"SEC-001": {"status": "pass"}}})
+        validate_review({"verdicts": {"SEC-001": {"status": "pass"}}}, ["SEC-001"])
+
+
+def test_review_must_cover_exactly_the_approved_rule_ids():
+    two_rules = ["SEC-001", "SEC-002"]
+    validate_review(
+        {"verdicts": {rid: {"status": "pass", "reason": "ok"} for rid in two_rules}},
+        two_rules,
+    )
+
+    missing = {"verdicts": {"SEC-001": {"status": "pass", "reason": "ok"}}}
+    with pytest.raises(ReviewInvalid, match="SEC-002"):
+        validate_review(missing, two_rules)
+
+    unknown = {"verdicts": {
+        "SEC-001": {"status": "pass", "reason": "ok"},
+        "SEC-999": {"status": "pass", "reason": "ok"},
+    }}
+    with pytest.raises(ReviewInvalid, match="SEC-999"):
+        validate_review(unknown, ["SEC-001"])
+
+
+def test_an_incomplete_review_counts_as_a_failed_loop(env):
+    registry, requests, _ = env
+
+    class IncompleteReview(MockReviewModel):
+        def review(self, req, project, plan, diff, rule_ids):
+            review = super().review(req, project, plan, diff, rule_ids)
+            review["verdicts"].pop("SEC-002")
+            return review
+
+    execution = RecordingExecution()
+    workflow = Workflow(
+        requests, registry, env[2].artifacts_root,
+        planning=MockPlanningModel(), execution=execution, review=IncompleteReview(),
+    )
+    req = requests.create("shop-api", "feature", "Add refund endpoint")
+
+    result = workflow.run(req["id"])
+
+    assert result["status"] == "failed"
+    assert len(execution.feedback_calls) == MAX_LOOPS
+    error = (workflow.artifact_dir(req["id"]) / "review-error.txt").read_text()
+    assert "SEC-002" in error
+
+
+def test_the_planner_must_cite_approved_rules(env):
+    registry, requests, _ = env
+
+    class EmptyPlan(MockPlanningModel):
+        def plan(self, req, project, rule_ids):
+            return "# Plan\n\nNo rules cited.\n"
+
+    class UnknownRulePlan(MockPlanningModel):
+        def plan(self, req, project, rule_ids):
+            return "# Plan\n\n## Rules relied on\n- SEC-999: made up\n"
+
+    for planning, message in ((EmptyPlan(), "no .*rule"), (UnknownRulePlan(), "not approved")):
+        workflow = Workflow(
+            requests, registry, env[2].artifacts_root,
+            planning=planning, execution=MockExecutionModel(), review=MockReviewModel(),
+        )
+        req = requests.create("shop-api", "feature", "Add refund endpoint")
+        with pytest.raises(WorkflowError, match=message):
+            workflow.run(req["id"])
 
 
 def test_failed_review_loops_then_stops_for_human(env):

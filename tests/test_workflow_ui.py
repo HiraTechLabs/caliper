@@ -12,6 +12,15 @@ class FailingReview(MockReviewModel):
     force_fail = True
 
 
+class IncompleteReview(MockReviewModel):
+    """Omits one approved rule: the review must be rejected, not accepted."""
+
+    def review(self, req, project, plan, diff, rule_ids):
+        review = super().review(req, project, plan, diff, rule_ids)
+        review["verdicts"].pop("SEC-002", None)
+        return review
+
+
 def _make(tmp_path, review=None):
     registry = ProjectRegistry(tmp_path / "projects")
     registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
@@ -61,3 +70,14 @@ def test_failed_review_shows_failed_rules_first_and_alert(tmp_path):
     assert "Failed" in response.text
     assert "3 times" in response.text
     assert response.text.index("FAIL") < response.text.index("passed - show")
+
+
+def test_an_invalid_review_shows_its_reason_on_the_request_page(tmp_path):
+    client = _make(tmp_path, review=IncompleteReview())
+    client.post("/projects/shop-api/requests/new", data={"kind": "feature", "text": "Add refund endpoint", "extra": ""})
+
+    response = client.post("/requests/req-1/run", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert "SEC-002" in response.text
+    assert "no verdict for approved rule" in response.text

@@ -21,8 +21,9 @@ nodes:
       failed verdicts and the human note, max 3 executions, then failed) ->
       approve&merge -> deploy_dev -> approve_prod -> live. request_changes also
       re-runs Execution with the human note. Owns artifact paths, review
-      validation (per-rule verdicts mandatory) and takes the rule IDs of
-      the project from its APPROVED principles.
+      validation (verdicts must cover exactly the approved rule IDs; an invalid
+      review counts as a failed loop and is shown on the request page) and
+      takes the rule IDs of the project from its APPROVED principles.
   - id: http-model-adapters
     path: caliper/http_models.py
     kind: domain
@@ -30,10 +31,11 @@ nodes:
       Role adapters (planning/execution/review classes) over a chat client with a
       post() method; roles are provider-agnostic. The default client is the
       OpenAI-compatible HTTP ChatClient with test-injectable transport (this is
-      how a local Ollama is reached). The planner must cite rule IDs, the
-      executor returns a fenced diff and, on a re-run, receives the failed rule
-      verdicts plus the human note in its prompt, the reviewer must return
-      per-rule JSON verdicts. Disabled by default.
+      how a local Ollama is reached). The planner must cite approved rule IDs
+      only, the executor returns a fenced diff and, on a re-run, receives the
+      failed rule verdicts plus the human note in its prompt, the reviewer must
+      return exactly one JSON verdict per approved rule (duplicate keys are
+      rejected). Disabled by default.
   - id: opencode-adapter
     path: caliper/opencode_models.py
     kind: domain

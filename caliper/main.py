@@ -295,8 +295,14 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             failed = [rid for rid, v in verdicts.items() if v["status"] == "fail"]
             passed = [rid for rid, v in verdicts.items() if v["status"] == "pass"]
             artifacts.pop("review")
+        review_error_path = artifacts_dir / "review-error.txt"
+        review_error = (
+            review_error_path.read_text(encoding="utf-8").strip()
+            if review_error_path.is_file() else None
+        )
         return templates.TemplateResponse(request, "request_detail.html", _ui_ctx(
             req=req, artifacts=artifacts, failed=failed, passed=passed, verdicts=verdicts,
+            review_error=review_error,
             delete_error=request.query_params.get("delete_error"),
         ))
 

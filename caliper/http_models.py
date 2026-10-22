@@ -1,6 +1,6 @@
 import json
 
-from caliper.workflow import validate_review, WorkflowError
+from caliper.workflow import ReviewInvalid, validate_plan, validate_review, WorkflowError
 
 
 class ChatClient:
@@ -47,17 +47,27 @@ def _extract_code_block(text: str) -> str:
     return text
 
 
+def _no_duplicate_keys(pairs):
+    """Reject a repeated key: a duplicate rule verdict silently overwrites the first one."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ReviewInvalid(f"Review output is invalid: duplicate rule id '{key}'.")
+        result[key] = value
+    return result
+
+
 def _extract_json(text: str) -> dict:
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = _extract_code_block(stripped)
     start, end = stripped.find("{"), stripped.rfind("}")
     if start == -1 or end == -1:
-        raise WorkflowError("Review model did not return JSON. A review with no rule verdicts is invalid.")
+        raise ReviewInvalid("Review model did not return JSON. A review with no rule verdicts is invalid.")
     try:
-        return json.loads(stripped[start:end + 1])
+        return json.loads(stripped[start:end + 1], object_pairs_hook=_no_duplicate_keys)
     except json.JSONDecodeError as exc:
-        raise WorkflowError(f"Review model returned unparseable JSON: {exc}")
+        raise ReviewInvalid(f"Review model returned unparseable JSON: {exc}")
 
 
 def _docs_block(project: dict) -> str:
@@ -94,6 +104,7 @@ class HTTPPlanningModel:
         output = self.client.post(prompt)
         if "SEC-" not in output and "ARC-" not in output and "PRF-" not in output and "CLC-" not in output and "BUS-" not in output and "TEC-" not in output:
             raise WorkflowError("Planner output contains no rule IDs. A plan without rule IDs is invalid.")
+        validate_plan(output, rule_ids)
         return output
 
 
@@ -119,6 +130,9 @@ class HTTPExecutionModel:
             )
         if note:
             parts.append(f"The human asked for these changes:\n{note}\n")
+        invalid = str(feedback.get("invalid_review") or "").strip()
+        if invalid:
+            parts.append(f"The previous review could not be used: {invalid}\n")
         parts.append("Return ONLY a NEW complete unified diff (one or more files). No prose outside the diff.")
         return _extract_code_block(self.client.post("".join(parts)))
 
@@ -133,8 +147,9 @@ class HTTPReviewModel:
             + _docs_block(project)
             + f"Request: {req['text']}\n\nPlan:\n{plan}\n\nDiff:\n{diff}\n\n"
             "Rules to judge: " + ", ".join(rule_ids) + "\n"
+            "Return exactly one verdict for every rule listed above and no other rule id.\n"
             "Reply with ONLY a JSON object: {\"verdicts\": {\"<rule-id>\": {\"status\": \"pass\"|\"fail\", \"reason\": \"...\"}}}."
         )
         parsed = _extract_json(self.client.post(prompt))
-        validate_review(parsed)
+        validate_review(parsed, rule_ids)
         return parsed

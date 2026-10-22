@@ -1,11 +1,59 @@
 import json
+import re
 from pathlib import Path
 
 MAX_LOOPS = 3
 
+RULE_ID_RE = re.compile(r"\b([A-Z]{3}-\d{3})\b")
+
 
 class WorkflowError(Exception):
     pass
+
+
+class ReviewInvalid(WorkflowError):
+    """The review output cannot be used: structure or rule coverage is wrong."""
+
+
+def validate_review(review: dict, rule_ids: list[str]) -> None:
+    if not isinstance(review, dict) or "verdicts" not in review:
+        raise ReviewInvalid("Review output is invalid: no 'verdicts' key.")
+    verdicts = review["verdicts"]
+    if not verdicts or any("status" not in v or "reason" not in v for v in verdicts.values()):
+        raise ReviewInvalid("Review output is invalid: entry without status/reason.")
+    if any(v["status"] not in ("pass", "fail") for v in verdicts.values()):
+        raise ReviewInvalid("Review output is invalid: status must be pass or fail.")
+    expected = set(rule_ids)
+    returned = set(verdicts)
+    missing = sorted(expected - returned)
+    if missing:
+        raise ReviewInvalid(
+            "Review output is invalid: no verdict for approved rule(s): " + ", ".join(missing) + "."
+        )
+    unknown = sorted(returned - expected)
+    if unknown:
+        raise ReviewInvalid(
+            "Review output is invalid: verdict for non-approved rule(s): " + ", ".join(unknown) + "."
+        )
+
+
+def cited_rule_ids(text: str) -> list[str]:
+    """Rule IDs the planner cites, in first-citation order, without repeats."""
+    return list(dict.fromkeys(RULE_ID_RE.findall(text or "")))
+
+
+def validate_plan(plan: str, rule_ids: list[str]) -> None:
+    cited = cited_rule_ids(plan)
+    if not cited:
+        raise WorkflowError(
+            "Planning output cites no principle rule IDs. A plan without rule IDs is invalid."
+        )
+    approved = set(rule_ids)
+    unknown = [rid for rid in cited if rid not in approved]
+    if unknown:
+        raise WorkflowError(
+            "Planning output cites rules that are not approved: " + ", ".join(unknown) + "."
+        )
 
 
 class MockDeployAdapter:
@@ -13,16 +61,6 @@ class MockDeployAdapter:
 
     def deploy(self, project: dict, env: str, req: dict) -> str:
         return f"[mock-deploy] {project['id']} -> {env} for {req['id']}"
-
-
-def validate_review(review: dict) -> None:
-    if not isinstance(review, dict) or "verdicts" not in review:
-        raise WorkflowError("Review output is invalid: no 'verdicts' key.")
-    verdicts = review["verdicts"]
-    if not verdicts or any("status" not in v or "reason" not in v for v in verdicts.values()):
-        raise WorkflowError("Review output is invalid: entry without status/reason.")
-    if any(v["status"] not in ("pass", "fail") for v in verdicts.values()):
-        raise WorkflowError("Review output is invalid: status must be pass or fail.")
 
 
 def failed_rules(review: dict) -> list[str]:
@@ -77,23 +115,38 @@ class Workflow:
         return self.execution.execute(req, project, plan, feedback)
 
     def _review_until_done(self, req: dict, project: dict, plan: str, rule_ids: list[str], diff: str) -> dict:
-        """Review the diff; on a failed review re-run Execution, up to MAX_LOOPS executions."""
+        """Review the diff; on a failed or invalid review re-run Execution, up to MAX_LOOPS executions."""
         req_id = req["id"]
+        dir = self.artifact_dir(req_id)
         while True:
             self.requests.update(req_id, status="reviewing")
-            review = self.review.review(req, project, plan, diff, rule_ids)
-            validate_review(review)
-            dir = self.artifact_dir(req_id)
-            (dir / "review.json").write_text(json.dumps(review, indent=2), encoding="utf-8")
+            review = None
+            error = None
+            try:
+                review = self.review.review(req, project, plan, diff, rule_ids)
+                validate_review(review, rule_ids)
+            except ReviewInvalid as exc:
+                error = str(exc)
+
             (dir / "diff.patch").write_text(diff, encoding="utf-8")
+            if error:
+                (dir / "review-error.txt").write_text(error + "\n", encoding="utf-8")
+            else:
+                (dir / "review-error.txt").unlink(missing_ok=True)
+                (dir / "review.json").write_text(json.dumps(review, indent=2), encoding="utf-8")
 
             loops = req["loop_count"]
-            if failed_rules(review) and loops + 1 < MAX_LOOPS:
+            failed = failed_rules(review) if review is not None else []
+            if (error or failed) and loops + 1 < MAX_LOOPS:
                 req = self.requests.update(req_id, loop_count=loops + 1)
                 self.requests.update(req_id, status="executing")
-                diff = self._execute(req, project, plan, self._feedback(req, review))
+                feedback = self._feedback(req, review)
+                if error:
+                    feedback = feedback or {}
+                    feedback["invalid_review"] = error
+                diff = self._execute(req, project, plan, feedback)
                 continue
-            if failed_rules(review):
+            if error or failed:
                 self.requests.update(req_id, status="failed")
                 return self.requests.get(req_id)
             self.requests.update(req_id, status="awaiting_approval")
@@ -120,6 +173,7 @@ class Workflow:
         self.requests.update(req_id, status="planning")
         plan = self.planning.plan(req, project, rule_ids)
         (dir / "plan.md").write_text(plan, encoding="utf-8")
+        validate_plan(plan, rule_ids)
 
         self.requests.update(req_id, status="executing")
         diff = self._execute(req, project, plan)

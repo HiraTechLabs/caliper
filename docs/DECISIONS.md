@@ -39,6 +39,7 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-030 | 2026-10-21 | Role distinctness stays on the model id; the provider is a transport only | (this) |
 | D-031 | 2026-10-21 | Patch-safety primitives (validate + git apply + per-request worktree); runtime wiring deferred | (this) |
 | D-032 | 2026-10-22 | A failed review re-runs Execution; request_changes calls Execution with the note | (this) |
+| D-033 | 2026-10-22 | Reviews must cover exactly the approved rule IDs; plans must cite approved IDs | (this) |
 
 ## Entries
 

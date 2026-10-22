@@ -62,6 +62,29 @@ def test_http_review_parses_json_and_validates_per_rule():
         bad.review({"id": "r", "kind": "feature", "text": "t"}, {"id": "p"}, "plan", "diff", ["SEC-001"])
 
 
+def test_http_review_rejects_duplicate_rule_verdicts():
+    payload = (
+        '{"verdicts": {'
+        '"SEC-001": {"status": "pass", "reason": "first"}, '
+        '"SEC-001": {"status": "fail", "reason": "second"}}}'
+    )
+    model = HTTPReviewModel(ChatClient("m", "http://x/v1", transport=lambda c, t: payload))
+    with pytest.raises(WorkflowError, match="duplicate"):
+        model.review(
+            {"id": "r", "kind": "feature", "text": "t"}, {"id": "p"}, "plan", "diff", ["SEC-001"]
+        )
+
+
+def test_http_review_rejects_a_missing_approved_rule():
+    payload = '{"verdicts": {"SEC-002": {"status": "pass", "reason": "ok"}}}'
+    model = HTTPReviewModel(ChatClient("m", "http://x/v1", transport=lambda c, t: payload))
+    with pytest.raises(WorkflowError, match="SEC-001"):
+        model.review(
+            {"id": "r", "kind": "feature", "text": "t"}, {"id": "p"}, "plan", "diff",
+            ["SEC-001", "SEC-002"],
+        )
+
+
 def test_prompts_include_the_project_graph_and_decisions():
     stored = []
     project = {

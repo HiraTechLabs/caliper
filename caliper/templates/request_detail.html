@@ -28,9 +28,12 @@
   {% endif %}
 </div>
 
-{% set review_visible = verdicts or req.status == 'reviewing' %}
+{% set review_visible = verdicts or req.status == 'reviewing' or review_error %}
 <section class="detail-section" data-review-section {% if not review_visible %}hidden{% endif %}>
   <h2>Review</h2>
+  {% if review_error %}
+  <div class="alert danger" role="alert" data-review-error>{{ review_error }}</div>
+  {% endif %}
   <div data-review-content data-review-signature="{{ verdicts|tojson if verdicts else '' }}">
     {% if verdicts %}
     {% if failed %}
