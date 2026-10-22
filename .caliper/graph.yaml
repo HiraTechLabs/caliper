@@ -19,12 +19,14 @@ nodes:
       Synchronous pipeline submitted -> planning -> executing -> reviewing ->
       awaiting_approval (or a failed-review loop that re-runs Execution with the
       failed verdicts and the human note, max 3 executions, then failed) ->
-      approve&merge -> deploy_dev -> approve_prod -> live. request_changes also
-      re-runs Execution with the human note. Owns artifact paths, review
-      validation (verdicts must cover exactly the approved rule IDs; an invalid
-      review counts as a failed loop and is shown on the request page) and
-      takes the rule IDs of the project from its APPROVED principles. Applies a
-      merge on approval; Dev/Prod deploys require a real deploy adapter.
+      approve (writes merged.marker and sets status merged) -> Dev/Prod only when
+      a real deploy adapter is configured, otherwise DeploymentNotConfigured and
+      the status stays merged. There is NO real Git branch, merge or push yet:
+      that is Phase 0c. request_changes re-runs Execution with the human note.
+      Owns artifact paths, review validation (verdicts must cover exactly the
+      approved rule IDs; an invalid review counts as a failed loop and is shown
+      on the request page) and takes the rule IDs of the project from its
+      APPROVED principles.
   - id: http-model-adapters
     path: caliper/http_models.py
     kind: domain
@@ -83,10 +85,11 @@ nodes:
     kind: domain
     description: >
       Deploy adapter interface on Workflow, with NO runtime implementation yet.
-      Approval always merges; with no adapter configured, Dev/Prod deploy calls
-      raise DeploymentNotConfigured ("Deployment is not configured") and the UI
-      shows that state instead of faking deployed_dev/live. Test doubles live
-      under tests/. The SSH/docker adapter arrives in Phase 2.
+      Approval only writes merged.marker and sets status merged (no Git merge);
+      with no adapter configured, Dev/Prod deploy calls raise
+      DeploymentNotConfigured ("Deployment is not configured") and the UI shows
+      that state instead of faking deployed_dev/live. Test doubles live under
+      tests/. The SSH/docker adapter arrives in Phase 2.
   - id: principles
     path: caliper/principles.py
     kind: domain
@@ -160,12 +163,13 @@ nodes:
     path: caliper/templates
     kind: presentation
     description: >
-      Jinja2 server-rendered screens per draft UI_SYSTEM: dashboard
+      Transitional Jinja2 screens with vanilla JS: dashboard
       (needs-you/in-progress/recent), projects list, add form, project page with
       setup checklist/environments/delete dialog, request page (stepper, review rows
       failed-first, plan, diff, approve gates, request delete confirmation), composer,
       empty/missing/error states. Vanilla JS subscribes to SSE and updates request
-      states without reload.
+      states without reload. This is NOT the target UI and does not conform to
+      docs/UI_SYSTEM.md v2 (React + shadcn/ui); the React port replaces it (D-044).
   - id: project-store
     path: projects/
     kind: data-store
@@ -178,7 +182,7 @@ nodes:
     path: tests/
     kind: test-suite
     description: >
-      pytest suite (169 passing) covering: scaffold smoke,
+      pytest suite (188 passing) covering: scaffold smoke,
       registry, request state store, request UI flows, workflow engine (success path,
       review loop exhaustion, validation), workflow UI (run/approve gates),
       models.yaml validation incl. per-role providers and (provider, model)-aware
@@ -190,7 +194,8 @@ nodes:
       against a local repository, SSH key and ssh-copy-id command, host key pinning
       and a changed host key), project docs (.caliper manifest/graph/decisions Git
       round trip, invalid graph reporting, docs API/UI, decision authoring, prompt context), safe project
-      deletion and SSE. Mock role adapters live only here.
+      deletion and SSE. Real ssh-keygen and ssh-keyscan tests skip with a reason when the
+      tool is absent. Mock role adapters live only here.
 
 edges:
   - from: app-core

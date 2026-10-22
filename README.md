@@ -148,14 +148,17 @@ CI has exactly three jobs in `.github/workflows/ci.yml`:
 ## Status
 
 The workflow runs end-to-end with configured real models: project setup checklist,
-request intake, planning/execution/review, review loop with a 3-attempt limit, human approval
-gate -> merge -> Dev -> second gate -> Prod, project docs (manifest/graph/decisions) read from
-the repository and included in model prompts, safe project deletion, and SSE request updates.
-Providers verified against the installed services on this machine: Ollama (OpenAI-compatible
-HTTP) and OpenCode (`opencode run --format json`). Patch-safety primitives (validation, safe
-git-apply, per-request worktrees) are in place and tested but not yet wired into the
-Execution step (.caliper/DECISIONS.md D-031).
-Test doubles exist only under `tests/`; the runtime has no mock deploy adapter. Approval always
-merges, and without a real deploy adapter the request page says "Deployment is not configured"
-instead of faking Dev/Prod. Real SSH/docker deploy and real Git branch/merge are still deferred
-(see .caliper/DECISIONS.md, D-036 and D-017).
+request intake, planning/execution/review, review loop with a 3-attempt limit, human approval,
+project docs (manifest/graph/decisions) read from the repository and included in model
+prompts, safe project deletion, and SSE request updates. Providers verified against the
+installed services on this machine: Ollama (OpenAI-compatible HTTP) and OpenCode
+(`opencode run --format json`). Patch-safety primitives (validation, safe git-apply,
+per-request worktrees) are in place and tested but not yet wired into the Execution step
+(.caliper/DECISIONS.md D-031).
+
+Test doubles exist only under `tests/`; the runtime has no mock deploy adapter. **Approval does
+not run a Git merge yet:** it writes `merged.marker` and sets the request to `merged`. Dev and
+Prod are reachable only with a real deploy adapter; otherwise the page says "Deployment is not
+configured" instead of faking `deployed_dev`/`live`. Real Git branch/merge/push, worktree
+execution and SSH/docker deploy are still deferred (Phase 0c and Phase 2; see
+`.caliper/DECISIONS.md` D-031, D-036 and D-017).

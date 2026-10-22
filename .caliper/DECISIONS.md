@@ -51,6 +51,7 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-042 | 2026-10-22 | A type check is deferred: mypy reports 9 errors in 5 modules | (this) |
 | D-043 | 2026-10-22 | `.caliper/` is the single home for Caliper's own decisions, graph and manifest | (this) |
 | D-044 | 2026-10-22 | `docs/UI_SYSTEM.md` v2 is the only UI spec; the current Jinja UI is transitional | (this) |
+| D-045 | 2026-10-22 | Graph and README descriptions state current behavior, not planned behavior | (this) |
 
 ## Entries
 
@@ -660,3 +661,22 @@ Format: id, date, decision, reason, alternatives rejected.
   contradiction remains in the repository); deleting the Jinja UI immediately (the Python-
   only runtime would lose its only UI before the React build exists); porting the UI in this
   phase (Phase 0b is correctness fixes; the port is a separate step).
+
+### D-045 — Graph and README descriptions state current behavior, not planned behavior
+- **Decision:** Every graph description was checked against the code and corrected where it
+  claimed behavior that does not exist. `workflow-engine` and `deploy-adapter` now say that
+  approval writes `merged.marker` and sets `merged` but does not run a Git merge; Dev/Prod
+  stay blocked without an adapter. `app-ui` is labelled a transitional Jinja2 UI that does
+  not conform to v2. The test count is 188. The README status section says the same and no
+  longer claims "approval always merges". The `smoke-cli` node was added so every `caliper/`
+  module is represented.
+- **Reason:** `graph.yaml` and the decisions are included in the Planning, Execution and
+  Review prompts, so a false node description is a false statement to every model and to the
+  human reading `GRAPH.md`. The specific falsehoods were "Applies a merge on approval",
+  "Approval always merges", "merge only", "Screens per draft UI_SYSTEM" and a stale test
+  count. They will change again when Phase 0c implements the real merge; this entry records
+  the truthful state before that work.
+- **Alternatives rejected:** leaving the descriptions until Phase 0c (models would read a
+  false graph in the meantime); deleting descriptions to avoid staleness (they are the reason
+  the graph is useful); describing planned behavior with a "planned" label (the prompt does
+  not distinguish plan from fact).
