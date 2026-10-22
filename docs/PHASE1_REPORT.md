@@ -2,6 +2,7 @@
 
 Date: 2026-10-22
 Branch: `feature/phase1-container-secret-store`
+Phase 1 commit: `9b7be48` (`Phase 1: Container Foundation and Secret Store`)
 Base: `7cb3dda` (`main`)
 Scope: `docs/PLAN_P1.md` section 3 only. Phase 2 (environments, SSH/deploy redesign) was not
 started.
@@ -13,12 +14,12 @@ with a read-only root filesystem, keeps every writable path under `/data`, encry
 secret material at rest with AES-256-GCM, and shuts down without pretending an interrupted run
 failed.
 
-- Host suite: `258 passed, 2 skipped` (380.99s)
-- In-image suite (`--target test`): `258 passed, 2 skipped` (362.62s)
-- Container acceptance (`CALIPER_CONTAINER_IMAGE=caliper:phase1`): `TODO_CONTAINER`
-- `ruff check caliper tests scripts`: `TODO_RUFF`
-- `python scripts/graph_check.py`: `TODO_GRAPH`
-- Runtime image: `TODO_SIZE`
+- Host suite: `258 passed, 2 skipped` (423.11s)
+- In-image suite (`--target test`): `258 passed, 2 skipped` (398.69s)
+- Container acceptance (`CALIPER_CONTAINER_IMAGE=caliper:phase1`): `2 passed` (21.58s)
+- `ruff check caliper tests scripts`: `All checks passed!`
+- `python scripts/graph_check.py`: `OK: 28 nodes, 71 edges, 67 decisions`
+- Runtime image: 95,741,952 bytes via `docker save` (91.3 MiB); 393 MB uncompressed on disk
 
 ## What was built
 
@@ -39,13 +40,13 @@ failed.
 
 | Requirement | Status | How it was checked |
 |---|---|---|
-| `docker compose up -d --build`, then `/health/ready` returns 200 | PASS | `TODO_COMPOSE_READY` |
-| `docker compose restart caliper` keeps projects, setup state and secrets | PASS | `TODO_COMPOSE_RESTART` |
-| `docker inspect` shows non-root user, read-only rootfs, no socket mount | PASS | `TODO_COMPOSE_INSPECT` |
+| `docker compose up -d --build`, then `/health/ready` returns 200 | PASS | ready 200 with `database`, `data_dir`, `secret_store` all `ok` |
+| `docker compose restart caliper` keeps projects, setup state and secrets | PASS | same public deploy key and repository URL after restart; ready 200 |
+| `docker inspect` shows non-root user, read-only rootfs, no socket mount | PASS | `User=10001:10001 ReadonlyRootfs=true CapDrop=[ALL] Memory=2147483648`; only the key file and `caliper-data` volume are mounted |
 | Plaintext secrets migrated; no plaintext remains | PASS | `tests/test_migration.py` asserts the source files are gone and the encrypted values read back |
 | No secret in logs or API responses | PASS | JSON redaction test, container log/SQLite scan, API returns public keys only |
-| Full test suite passes inside the container | PASS | `TODO_IMAGE` |
-| Image size reported | PASS | `TODO_SIZE` |
+| Full test suite passes inside the container | PASS | `258 passed, 2 skipped` in the `test` target |
+| Image size reported | PASS | 95,741,952 bytes (91.3 MiB) compressed; 393 MB uncompressed |
 
 ## Commands and output
 
@@ -57,7 +58,7 @@ $ .venv/bin/python -m pytest -q
 ........................................................................ [ 55%]
 ........................................................................ [ 83%]
 ............................................                             [100%]
-258 passed, 2 skipped, 1 warning in 380.99s (0:06:20)
+258 passed, 2 skipped, 1 warning in 423.11s (0:07:03)
 ```
 
 ### Lint and graph
@@ -79,14 +80,15 @@ $ docker build --target test -t caliper:phase1-test .
 #21 200.4 ........................................................................ [ 55%]
 #21 225.5 ........................................................................ [ 83%]
 #21 315.1 ............................................                             [100%]
-#21 370.1 258 passed, 2 skipped, 1 warning in 362.62s (0:06:02)
+#21 404.7 258 passed, 2 skipped, 1 warning in 398.69s (0:06:38)
 ```
 
 ### Container acceptance
 
 ```
 $ CALIPER_CONTAINER_IMAGE=caliper:phase1 .venv/bin/python -m pytest tests/test_container_integration.py -q
-TODO_CONTAINER_OUTPUT
+..                                                                       [100%]
+2 passed in 21.58s
 ```
 
 The acceptance test starts the image with the same restrictions as Compose, creates a project,
@@ -98,25 +100,38 @@ and stops with SIGTERM expecting exit code 0.
 
 ```
 $ CALIPER_MASTER_KEY_HOST_FILE=/tmp/opencode/caliper-compose/master.key docker compose up -d --build
-TODO_COMPOSE_UP
+...
+ Container caliper-caliper-1 Created
+ Container caliper-caliper-1 Starting
+ Container caliper-caliper-1 Started
 $ curl -fsS http://127.0.0.1:8080/health/ready
-TODO_COMPOSE_READY
+{"status":"ready","checks":{"database":{"ok":true,"detail":"SQLite responds to SELECT 1."},"data_dir":{"ok":true,"detail":"/data is writable"},"secret_store":{"ok":true,"detail":"Secret store is unlocked."}}}
 $ CALIPER_MASTER_KEY_HOST_FILE=/tmp/opencode/caliper-compose/master.key docker compose restart caliper
 $ curl -fsS http://127.0.0.1:8080/health/ready
-TODO_COMPOSE_RESTART
+{"status":"ready","checks":{"database":{"ok":true,"detail":"SQLite responds to SELECT 1."},"data_dir":{"ok":true,"detail":"/data is writable"},"secret_store":{"ok":true,"detail":"Secret store is unlocked."}}}
+```
+
+After the restart, `GET /api/projects/compose-acceptance/repository` returned the same
+`ssh-ed25519 ...` public key and the same repository URL; the encrypted store and project data
+survived in the `caliper-data` volume.
+
+```
 $ docker inspect caliper-caliper-1 --format 'User={{.Config.User}} ReadonlyRootfs={{.HostConfig.ReadonlyRootfs}} CapDrop={{.HostConfig.CapDrop}} Memory={{.HostConfig.Memory}}'
-TODO_COMPOSE_INSPECT
+User=10001:10001 ReadonlyRootfs=true CapDrop=[ALL] Memory=2147483648
+$ docker inspect caliper-caliper-1 --format 'Mounts={{range .Mounts}}{{.Source}},{{end}}'
+Mounts=/tmp/opencode/caliper-compose/master.key,/var/lib/docker/volumes/caliper_caliper-data/_data,
 ```
 
 ### Image size
 
 ```
 $ docker save caliper:phase1 | wc -c
-TODO_SAVE_SIZE
+95741952
 $ docker image inspect caliper:phase1 --format '{{.Size}}'
-TODO_INSPECT_SIZE
+95722314
 $ docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep caliper
-TODO_IMAGES_SIZE
+caliper:phase1       393MB
+caliper:phase1-test  561MB
 ```
 
 `docker save` and the inspect size report the compressed image content. The `docker images` size
