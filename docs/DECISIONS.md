@@ -43,6 +43,8 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-034 | 2026-10-22 | httpx and python-multipart are runtime dependencies; package data ships with the app | (this) |
 | D-035 | 2026-10-22 | The OpenCode `executable` persists; API-key files are created at 0600 atomically | (this) |
 | D-036 | 2026-10-22 | No deploy mock in the runtime: approve merges, deploy says "Deployment is not configured" | (this) |
+| D-037 | 2026-10-22 | LF line endings, `node_modules/` untracked, the esbuild bundle stays committed | (this) |
+| D-038 | 2026-10-22 | Tests that need real OpenSSH tools skip with an explicit reason | (this) |
 
 ## Entries
 
@@ -447,3 +449,40 @@ Format: id, date, decision, reason, alternatives rejected.
   identical input); letting the human edit the plan by hand (kept as a manual escape hatch, but
   not the primary path); sending the full review transcript to Execution (larger prompt with no
   extra signal — only the failed verdicts and the note are sent).
+
+### D-037 — LF line endings, `node_modules/` untracked, the esbuild bundle stays committed
+- **Decision:** `.gitattributes` declares `* text=auto eol=lf`, so every text file in the
+  working tree is normalized to LF on checkout and commit. `node_modules/` is removed from
+  Git and ignored; `package.json` and `package-lock.json` stay committed and remain the
+  reproducible definition of the build toolchain. The esbuild bundle
+  `caliper/static/app.js` stays committed; it is not built at install time or at startup.
+- **Reason:** The runtime is Python plus static files, and AGENTS.md section 6 says Node is
+  needed only to build. Building the bundle during install or startup would add Node to the
+  runtime path and could leave a half-built UI. The bundle is the artifact the current
+  transitional Jinja UI serves, so keeping it in Git makes `python -m caliper` work on a
+  machine without Node. `node_modules/` was about 1000 tracked files of platform-specific
+  binaries that the lockfile can reproduce.
+- **Known limitation:** Source (`caliper/static/js/app.js`) and bundle can drift. Until the
+  React port replaces this stack, rebuild with `npm run build` whenever the source changes; CI
+  does not verify the bundle because that would add a Node toolchain to the three fixed jobs.
+- **Alternatives rejected:** building the bundle at install/startup (Node becomes a runtime
+  dependency); serving the unbundled source (the browser cannot resolve the `motion` import);
+  keeping `node_modules/` tracked (unreviewable churn, platform-specific binaries);
+  committing the bundle but not the source (the bundle would become the only, opaque source).
+
+### D-038 — Tests that need real OpenSSH tools skip with an explicit reason
+- **Decision:** Real-tool tests use the `requires_ssh_keygen` and `requires_ssh_keyscan`
+  markers in `tests/support.py`; a missing binary skips the test with the reason
+  "ssh-keygen/ssh-keyscan is not available; this test exercises real ...". The two real-tool
+  tests are `tests/test_remote_tools.py` (key generation and the plain-language failure of a
+  host-key scan against an unreachable host). No existing environment, repository or deletion
+  test needs a real `ssh`, `ssh-keygen` or `ssh-keyscan`: those probes inject `_run` or
+  `scan_host_key` fakes.
+- **Reason:** CI and developer machines may not have the OpenSSH client tools. A missing
+  binary must not look like a product defect, and a blanket skip of the environment tests
+  would hide tests that do not need the tools at all. Naming the tool in the skip reason
+  makes the requirement visible instead of silently passing.
+- **Alternatives rejected:** letting the tests fail with `FileNotFoundError` (a setup gap
+  reported as a code failure); skipping the whole environment test module (they use an
+  injected runner and are valuable everywhere); mocking the real-tool tests too (they would
+  then prove nothing about the real binaries).

@@ -1,10 +1,22 @@
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from caliper.principles import PRINCIPLE_ORDER, PRINCIPLE_PREFIXES
 from caliper.registry import ENVIRONMENT_ORDER
+
+requires_ssh_keygen = pytest.mark.skipif(
+    os.name == "nt" or shutil.which("ssh-keygen") is None,
+    reason="ssh-keygen is not available; this test exercises real key generation",
+)
+requires_ssh_keyscan = pytest.mark.skipif(
+    shutil.which("ssh-keyscan") is None,
+    reason="ssh-keyscan is not available; this test exercises a real host-key scan",
+)
 
 
 def make_git_repo(path: Path, branch: str = "main") -> str:

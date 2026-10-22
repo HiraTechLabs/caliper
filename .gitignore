@@ -6,3 +6,4 @@ build/
 .venv/
 projects/
 .caliper-state/
+node_modules/
