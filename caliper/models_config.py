@@ -229,6 +229,8 @@ class ModelsSettings:
                 "base_url": config[role]["base_url"],
                 "model": config[role]["model"],
                 "timeout": config[role]["timeout"],
+                **({"executable": config[role]["executable"]}
+                   if config[role]["provider"] == "opencode" else {}),
             }
             for role in ROLE_ORDER
         }
@@ -244,12 +246,14 @@ class ModelsSettings:
         return config
 
     def _write_secret(self, role: str, key: str) -> None:
+        """Create/overwrite the key file with mode 0600 in one step (no chmod window)."""
         path = self.key_path(role)
-        path.write_text(key + "\n", encoding="utf-8")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+            os.fchmod(fd, 0o600)
+            os.write(fd, (key + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
 
     def make_adapters(self, transports: dict | None = None) -> dict:
         config = self.load()

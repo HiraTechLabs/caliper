@@ -1,3 +1,6 @@
+import os
+import stat
+
 import pytest
 import yaml
 
@@ -119,6 +122,53 @@ def test_opencode_role_builds_an_opencode_backed_adapter(tmp_path):
     adapters = settings.make_adapters()
     assert type(adapters["execution"].client).__name__ == "OpenCodeClient"
     assert adapters["execution"].client.model == "opencode/glm-5.3-flash-free"
+
+
+def test_executable_round_trips_in_models_yaml(tmp_path):
+    settings = _settings(tmp_path)
+    entries = _entries()
+    entries["execution"].update({
+        "provider": "opencode", "base_url": "", "model": "opencode/glm-5.3-flash-free",
+        "executable": "/opt/opencode/bin/opencode",
+    })
+
+    settings.save(entries)
+
+    stored = yaml.safe_load(settings.path.read_text(encoding="utf-8"))
+    assert stored["execution"]["executable"] == "/opt/opencode/bin/opencode"
+    assert settings.load()["execution"]["executable"] == "/opt/opencode/bin/opencode"
+    adapters = settings.make_adapters()
+    assert adapters["execution"].client.executable == "/opt/opencode/bin/opencode"
+
+
+def test_secret_files_are_written_without_a_chmod_window(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    calls = []
+
+    def forbidden_chmod(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("secrets must be created with os.open(mode=0o600), not chmod-ed")
+
+    monkeypatch.setattr("caliper.models_config.os.chmod", forbidden_chmod)
+
+    settings.save(_entries(), keys={"planning": "sk-planning"})
+
+    assert calls == []
+    assert stat.S_IMODE(settings.key_path("planning").stat().st_mode) == 0o600
+    assert settings.api_key("planning") == "sk-planning"
+
+
+def test_an_existing_world_readable_secret_is_tightened_on_save(tmp_path):
+    settings = _settings(tmp_path)
+    settings.secrets_dir.mkdir(parents=True, exist_ok=True)
+    path = settings.key_path("planning")
+    path.write_text("old-key\n", encoding="utf-8")
+    os.chmod(path, 0o644)
+
+    settings.save(_entries(), keys={"planning": "sk-new"})
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert settings.api_key("planning") == "sk-new"
 
 
 def test_timeout_is_validated_and_stored(tmp_path):

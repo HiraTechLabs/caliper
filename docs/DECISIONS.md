@@ -41,6 +41,7 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-032 | 2026-10-22 | A failed review re-runs Execution; request_changes calls Execution with the note | (this) |
 | D-033 | 2026-10-22 | Reviews must cover exactly the approved rule IDs; plans must cite approved IDs | (this) |
 | D-034 | 2026-10-22 | httpx and python-multipart are runtime dependencies; package data ships with the app | (this) |
+| D-035 | 2026-10-22 | The OpenCode `executable` persists; API-key files are created at 0600 atomically | (this) |
 
 ## Entries
 

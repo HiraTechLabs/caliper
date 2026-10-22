@@ -63,10 +63,12 @@ nodes:
     kind: domain
     description: >
       Loads/validates models.yaml (three roles, provider http|opencode, base_url,
-      model, timeout, keys under CALIPER_SECRETS_DIR) and enforces three DISTINCT
-      model ids at startup — the model id is the identity; the provider is only a
-      transport. Blank roles block workflow runs; the factory builds HTTP role
-      adapters backed by the ChatClient or the OpenCodeClient per role provider.
+      model, timeout, executable for opencode roles, keys under
+      CALIPER_SECRETS_DIR created at 0600 in one os.open) and enforces three
+      DISTINCT model ids at startup — the model id is the identity; the provider
+      is only a transport. Blank roles block workflow runs; the factory builds
+      HTTP role adapters backed by the ChatClient or the OpenCodeClient per role
+      provider.
   - id: deploy-adapter
     path: caliper/workflow.py
     kind: domain
