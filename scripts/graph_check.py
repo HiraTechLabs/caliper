@@ -27,8 +27,8 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_GRAPH = "docs/graph.yaml"
-DEFAULT_DECISIONS = "docs/DECISIONS.md"
+DEFAULT_GRAPH = ".caliper/graph.yaml"
+DEFAULT_DECISIONS = ".caliper/DECISIONS.md"
 NODE_KINDS = {
     "application",
     "domain",

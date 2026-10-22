@@ -1,6 +1,6 @@
 # graph.yaml — Caliper component graph (source of truth)
-# docs/GRAPH.md is the human-readable view; this file is authoritative.
-# CI graph-check (when wired) fails if any edge references a missing component.
+# .caliper/GRAPH.md is the human-readable view; this file is authoritative.
+# CI graph-check fails if an edge or node path references a missing component.
 
 nodes:
   - id: app-core
@@ -17,30 +17,76 @@ nodes:
     kind: domain
     description: >
       Synchronous pipeline submitted -> planning -> executing -> reviewing ->
-      awaiting_approval (or requested-changes loop, max 3, then failed) ->
-      approve&merge -> deploy_dev -> approve_prod -> live. Owns artifact paths,
-      review validation (per-rule verdicts mandatory) and takes the rule IDs of
-      the project from its APPROVED principles.
+      awaiting_approval (or a failed-review loop that re-runs Execution with the
+      failed verdicts and the human note, max 3 executions, then failed) ->
+      approve&merge -> deploy_dev -> approve_prod -> live. request_changes also
+      re-runs Execution with the human note. Owns artifact paths, review
+      validation (verdicts must cover exactly the approved rule IDs; an invalid
+      review counts as a failed loop and is shown on the request page) and
+      takes the rule IDs of the project from its APPROVED principles. Applies a
+      merge on approval; Dev/Prod deploys require a real deploy adapter.
   - id: http-model-adapters
     path: caliper/http_models.py
     kind: domain
     description: >
-      OpenAI-compatible HTTP role adapters (chat/completions) with test-injectable
-      transport: planner must cite rule IDs, executor returns fenced diff,
-      reviewer must return per-rule JSON verdicts. Disabled by default.
+      Role adapters (planning/execution/review classes) over a chat client with a
+      post() method; roles are provider-agnostic. The default client is the
+      OpenAI-compatible HTTP ChatClient with test-injectable transport (this is
+      how a local Ollama is reached). The planner must cite approved rule IDs
+      only, the executor returns a fenced diff and, on a re-run, receives the
+      failed rule verdicts plus the human note in its prompt, the reviewer must
+      return exactly one JSON verdict per approved rule (duplicate keys are
+      rejected). Disabled by default.
+  - id: opencode-adapter
+    path: caliper/opencode_models.py
+    kind: domain
+    description: >
+      OpenCode CLI client, a post()-compatible stand-in for ChatClient: runs
+      `opencode run --format json --model <provider/model>` as an argv array
+      (never a shell string), bounded timeout, secret-token redaction in error
+      output, plain-language failures for a missing executable, nonzero exit,
+      timeout and empty/malformed output. --auto is never passed; OpenCode keeps
+      its own credentials outside Caliper.
+  - id: patch-safety
+    path: caliper/patch_safety.py
+    kind: domain
+    description: >
+      Tested primitives for future repository-aware execution: static patch
+      validation (absolute paths, path traversal, backslash paths, binary and
+      malformed/empty patches rejected), safe application through
+      `git apply --check` then `git apply` (argv array, bounded timeout, stdin)
+      inside one target worktree, and per-request isolation with
+      `create_worktree`/`remove_worktree` on the branch `caliper/<request id>`,
+      never the default branch. NOT yet wired into the workflow: this is the
+      tracked follow-up of D-031.
   - id: models-config
     path: caliper/models_config.py
     kind: domain
     description: >
-      Loads/validates models.yaml (three roles, base_url + model, keys under
-      CALIPER_SECRETS_DIR) and enforces three DISTINCT model ids at startup.
-      Blank roles block workflow runs; the factory builds HTTP role adapters.
+      Loads/validates models.yaml (three roles, provider http|opencode, base_url,
+      model, timeout, executable for opencode roles, keys under
+      CALIPER_SECRETS_DIR created at 0600 in one os.open) and enforces three
+      DISTINCT model ids at startup — the model id is the identity; the provider
+      is only a transport. Blank roles block workflow runs; the factory builds
+      HTTP role adapters backed by the ChatClient or the OpenCodeClient per role
+      provider.
+  - id: smoke-cli
+    path: caliper/smoke.py
+    kind: application
+    description: >
+      Developer smoke command `python -m caliper.smoke planning|execution|review
+      [--timeout N]`: loads one configured role, sends one tiny prompt through the
+      real provider and prints the reply. Never prints a saved API key; exits 1 with
+      a plain reason when the role is not configured or the call fails.
   - id: deploy-adapter
     path: caliper/workflow.py
     kind: domain
     description: >
-      Deploy adapter interface; MockDeployAdapter records dev/prod deploys.
-      Real SSH/docker adapter deferred until a real environment is reachable.
+      Deploy adapter interface on Workflow, with NO runtime implementation yet.
+      Approval always merges; with no adapter configured, Dev/Prod deploy calls
+      raise DeploymentNotConfigured ("Deployment is not configured") and the UI
+      shows that state instead of faking deployed_dev/live. Test doubles live
+      under tests/. The SSH/docker adapter arrives in Phase 2.
   - id: principles
     path: caliper/principles.py
     kind: domain
@@ -132,10 +178,13 @@ nodes:
     path: tests/
     kind: test-suite
     description: >
-      pytest suite (130 passing, 1 skipped on Windows) covering: scaffold smoke,
+      pytest suite (169 passing) covering: scaffold smoke,
       registry, request state store, request UI flows, workflow engine (success path,
       review loop exhaustion, validation), workflow UI (run/approve gates),
-      models.yaml validation, HTTP adapters with fake transport, dashboard/global
+      models.yaml validation incl. per-role providers and (provider, model)-aware
+      config, HTTP adapters with fake transport, the OpenCode CLI adapter (argv
+      construction without a shell, timeout, nonzero exit, missing binary,
+      empty/malformed/redacted output), dashboard/global
       composer/status snapshot, repository access (deploy key, read/write probe),
       the principles/environments API (states, approval rules, Git round trip
       against a local repository, SSH key and ssh-copy-id command, host key pinning
@@ -174,6 +223,15 @@ edges:
   - from: models-config
     to: http-model-adapters
     relation: builds-when-configured
+  - from: smoke-cli
+    to: models-config
+    relation: probes-a-configured-role-through
+  - from: models-config
+    to: opencode-adapter
+    relation: builds-for-roles-with-provider-opencode
+  - from: workflow-engine
+    to: opencode-adapter
+    relation: role-calls-when-configured-through
   - from: workflow-engine
     to: deploy-adapter
     relation: deploys-through
@@ -240,6 +298,12 @@ edges:
   - from: tests
     to: http-model-adapters
     relation: tests-with-fake-transport
+  - from: tests
+    to: opencode-adapter
+    relation: tests-with-stub-executable-and-json-lines-runner
+  - from: tests
+    to: patch-safety
+    relation: tests-against-real-local-git-repositories
   - from: tests
     to: principles
     relation: tests

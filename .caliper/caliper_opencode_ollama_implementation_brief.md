@@ -13,7 +13,7 @@ This is an implementation task, not a request for a proposal only. Inspect the c
 
 ## Non-negotiable working rules
 
-1. **Inspect before editing.** Read `AGENTS.md`, `README.md`, `docs/DECISIONS.md`, `docs/GRAPH.md`, the actual graph file, `caliper/http_models.py`, `caliper/models_config.py`, `caliper/workflow.py`, `caliper/project_docs.py`, repository/remote modules, relevant settings/UI code, and tests.
+1. **Inspect before editing.** Read `AGENTS.md`, `README.md`, `.caliper/DECISIONS.md`, `.caliper/GRAPH.md`, the actual graph file, `caliper/http_models.py`, `caliper/models_config.py`, `caliper/workflow.py`, `caliper/project_docs.py`, repository/remote modules, relevant settings/UI code, and tests.
 2. Do not replace or rewrite the architecture wholesale. Extend existing interfaces and patterns.
 3. Do not claim an integration works until it has been exercised with a real local test or a clearly documented smoke test. Unit tests with fakes are necessary but not sufficient for claims about real provider connectivity.
 4. Never ask the user to paste API keys, passwords, private SSH keys, or other secrets into chat, prompts, logs, Git, YAML, or test fixtures.

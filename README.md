@@ -126,9 +126,11 @@ the network; all setup works without a desktop session.
 
 ```
 AGENTS.md    repo rules (read first)
-docs/        self-documentation: docs/DECISIONS.md, docs/GRAPH.md + graph.yaml, docs/UI_SYSTEM.md (draft, awaiting human approval)
+.caliper/    Caliper's own decisions (DECISIONS.md), graph (GRAPH.md + graph.yaml) and manifest
+docs/        human-facing documents: UI_SYSTEM.md, AUDIT.md, PLAN_P1.md and reports
 caliper/     application package: FastAPI app, project registry, Jinja2 templates + static CSS
 projects/    runtime data (created on first project; not committed; CALIPER_PROJECTS_ROOT overrides)
+scripts/     repository checks (graph_check.py, the graph-check CI job)
 tests/       tests (registry behavior, UI flows, smoke)
 ```
 
@@ -152,8 +154,8 @@ the repository and included in model prompts, safe project deletion, and SSE req
 Providers verified against the installed services on this machine: Ollama (OpenAI-compatible
 HTTP) and OpenCode (`opencode run --format json`). Patch-safety primitives (validation, safe
 git-apply, per-request worktrees) are in place and tested but not yet wired into the
-Execution step (docs/DECISIONS.md D-031).
+Execution step (.caliper/DECISIONS.md D-031).
 Test doubles exist only under `tests/`; the runtime has no mock deploy adapter. Approval always
 merges, and without a real deploy adapter the request page says "Deployment is not configured"
 instead of faking Dev/Prod. Real SSH/docker deploy and real Git branch/merge are still deferred
-(see docs/DECISIONS.md, D-036 and D-017).
+(see .caliper/DECISIONS.md, D-036 and D-017).

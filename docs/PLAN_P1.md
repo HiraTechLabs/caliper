@@ -31,7 +31,7 @@ Repo state (verified from an archive of the working tree, branch `feature/openco
 - One phase at a time. After each phase: run everything, paste output, report "works / does not work / next", then STOP for human approval.
 - No mocks in the running app. Tests may use fakes for unit tests, but each phase also needs an integration test against a real component (a real `sshd` container for environments, a real HTTP server for model endpoints).
 - No passwords are ever stored. No secret appears in logs, prompts, the repo, API responses, or plaintext SQLite.
-- Every new component, dependency, and CI job gets a `docs/DECISIONS.md` entry; `docs/graph.yaml` is updated in the same commit.
+- Every new component, dependency, and CI job gets a `.caliper/DECISIONS.md` entry; `.caliper/graph.yaml` is updated in the same commit.
 - UI: follow `docs/UI_SYSTEM.md`. If the frontend migration (React + shadcn) is not done yet, deliver API + tests for the UI parts, list the screens that the frontend port must add, and do NOT build new Jinja pages.
 - If something in this plan conflicts with what the code actually does, stop and ask the human. Do not guess.
 
@@ -218,7 +218,7 @@ Record tokens and cost per role per request when the provider reports them. When
 ## 6. Phase 4 — CI and documentation
 
 1. GitHub Actions: keep `test`, `lint`, `graph-check`. Add a fourth job `image` (build the container image, push to `ghcr.io/hiratechlabs/caliper` tagged by commit SHA on `main`). Adding it requires a DECISIONS entry (AGENTS.md section 8 says exactly three jobs; this is a deliberate amendment).
-2. Update README (container-first run instructions), `docs/DECISIONS.md`, `docs/GRAPH.md` and `graph.yaml` (new nodes: secret store, agent-runner, remote executor, ollama service).
+2. Update README (container-first run instructions), `.caliper/DECISIONS.md`, `.caliper/GRAPH.md` and `.caliper/graph.yaml` (new nodes: secret store, agent-runner, remote executor, ollama service).
 3. Apply the AGENTS.md amendments in section 8.
 
 ### Acceptance

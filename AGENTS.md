@@ -10,7 +10,7 @@ This repo starts empty. Do not reuse or recreate anything from it by habit.
 2. **One step at a time.** Never start step N+1 until step N runs, is tested, and is shown to the human.
 3. **No stubs in the UI.** A feature that does not work does not appear. No placeholder pages, no dead buttons.
 4. **No feature without a test and a user-visible effect.** If the human cannot see it work, it is not done.
-5. **No unexplained component.** Every file, job, and dependency has a one-line reason in `docs/DECISIONS.md`. If you cannot write the reason, do not add it.
+5. **No unexplained component.** Every file, job, and dependency has a one-line reason in `.caliper/DECISIONS.md`. If you cannot write the reason, do not add it.
 6. **Report honestly.** After each step output: what works, what does not, what is next. Never claim "done" without running it.
 7. **Stay in scope.** Anything not listed in this file requires a human decision first.
 
@@ -52,12 +52,14 @@ Per project: `projects/<id>/principles/{security,business,architecture,techstack
 - A review with no rule IDs is invalid.
 
 ## 5. Mandatory self-documentation (from the first commit)
-Caliper documents itself with the same system it provides:
-1. `docs/DECISIONS.md` — one entry per decision: id, date, decision, reason, alternatives rejected.
+Caliper documents itself with the same system it provides. `.caliper/` is the single home for
+Caliper's own decisions, graph and manifest; `docs/` holds human-facing documents only.
+1. `.caliper/DECISIONS.md` — one entry per decision: id, date, decision, reason, alternatives rejected.
    Every non-trivial choice you make gets an entry **in the same commit**.
-2. `docs/GRAPH.md` (+ `graph.yaml` as source of truth) — nodes (components) and edges (relations).
-   Update in the same commit as any structural change. CI fails if `graph.yaml` references a missing component.
-3. `docs/UI_SYSTEM.md` — see section 7.
+2. `.caliper/GRAPH.md` (+ `.caliper/graph.yaml` as source of truth) — nodes (components) and edges (relations).
+   Update in the same commit as any structural change. CI fails if `graph.yaml` references a missing component
+   or if the decision index and entries disagree.
+3. `docs/UI_SYSTEM.md` — see section 7. `docs/` also holds `AUDIT.md`, `PLAN_P1.md` and reports.
 
 ## 6. Stack (fixed, do not change without a Decision entry)
 Backend: Python, FastAPI, SQLite (no external DB), Git, YAML manifests per project.
@@ -121,7 +123,7 @@ Nothing else.
 
 ## 9. Work order (do in this order, one step at a time)
 1. Scaffold: repo layout, README (what Caliper is, how to run in one command), `docs/` folder, one passing smoke test.
-2. Create DECISIONS.md, GRAPH.md/graph.yaml, UI_SYSTEM.md (and record the scaffold decisions).
+2. Create `.caliper/DECISIONS.md`, `.caliper/GRAPH.md`/`graph.yaml`, `docs/UI_SYSTEM.md` (and record the scaffold decisions).
 3. Project registry (create/list/view project, manifest + 6 principles files + env definitions).
 4. Request intake (feature | bugfix) bound to a project.
 5. Workflow engine with the 3 roles behind an adapter interface; mock adapters first.
