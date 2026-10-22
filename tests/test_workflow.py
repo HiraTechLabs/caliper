@@ -6,7 +6,7 @@ from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
 from caliper.workflow import MAX_LOOPS, ReviewInvalid, Workflow, WorkflowError, validate_review
 from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel, RecordingDeployAdapter
-from tests.support import approve_principles
+from tests.support import approve_principles, attach_real_repo
 
 
 class FailingReview(MockReviewModel):
@@ -14,7 +14,11 @@ class FailingReview(MockReviewModel):
 
 
 class RecordingExecution(MockExecutionModel):
-    """Records the feedback each Execution call receives and marks the revision."""
+    """Records the feedback each Execution call receives and marks the revision.
+
+    The revision line is added inside the mock hunk so the result is a valid
+    unified diff that ``git apply`` accepts.
+    """
 
     def __init__(self):
         self.feedback_calls = []
@@ -22,7 +26,9 @@ class RecordingExecution(MockExecutionModel):
     def execute(self, req, project, plan, feedback=None):
         self.feedback_calls.append(feedback)
         revision = "v1" if not feedback else "v2"
-        return super().execute(req, project, plan) + f"+Revision: {revision}\n"
+        diff = super().execute(req, project, plan)
+        diff = diff.replace("@@ -0,0 +1,3 @@", "@@ -0,0 +1,4 @@")
+        return diff + f"+Revision: {revision}\n"
 
 
 class OnceFailingReview(MockReviewModel):
@@ -31,16 +37,17 @@ class OnceFailingReview(MockReviewModel):
     def __init__(self):
         self.reviews = 0
 
-    def review(self, req, project, plan, diff, rule_ids):
+    def review(self, req, project, plan, diff, rule_ids, tests=None):
         self.reviews += 1
         self.force_fail = self.reviews == 1
-        return super().review(req, project, plan, diff, rule_ids)
+        return super().review(req, project, plan, diff, rule_ids, tests=tests)
 
 
 @pytest.fixture()
 def env(tmp_path):
     registry = ProjectRegistry(tmp_path / "projects")
     registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    attach_real_repo(tmp_path, registry, "shop-api")
     approve_principles(registry, "shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
     workflow = Workflow(
@@ -120,8 +127,8 @@ def test_an_incomplete_review_counts_as_a_failed_loop(env):
     registry, requests, _ = env
 
     class IncompleteReview(MockReviewModel):
-        def review(self, req, project, plan, diff, rule_ids):
-            review = super().review(req, project, plan, diff, rule_ids)
+        def review(self, req, project, plan, diff, rule_ids, tests=None):
+            review = super().review(req, project, plan, diff, rule_ids, tests=tests)
             review["verdicts"].pop("SEC-002")
             return review
 
@@ -227,7 +234,11 @@ def test_without_a_deploy_adapter_the_request_is_merged_but_deploy_is_blocked(en
     merged = workflow.approve_merge(req["id"])
 
     assert merged["status"] == "merged"
-    assert (workflow.artifact_dir(req["id"]) / "merged.marker").is_file()
+    assert merged["merge_commit"]
+    merge_note = (workflow.artifact_dir(req["id"]) / "merge-commit.txt").read_text()
+    assert merged["merge_commit"] in merge_note
+    assert not (workflow.artifact_dir(req["id"]) / "merged.marker").exists()
+    assert not workflow.workspace.worktree_path("shop-api", req["id"]).exists()
     assert not (workflow.artifact_dir(req["id"]) / "deploy-dev.log").exists()
     assert workflow.deploy_configured is False
     with pytest.raises(WorkflowError, match="Deployment is not configured"):

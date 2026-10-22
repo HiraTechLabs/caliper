@@ -122,6 +122,12 @@ class HTTPExecutionModel:
             + _docs_block(project)
             + f"Request: {req['text']}\nPlan:\n{plan}\n"
         ]
+        code_context = str(project.get("code_context") or "").strip()
+        if code_context:
+            parts.append(
+                "Current project code (the plan names the relevant files). "
+                "Your diff must apply to this exact content:\n" + code_context + "\n\n"
+            )
         if failed:
             parts.append(
                 "The previous review failed these rules; fix every one of them:\n"
@@ -133,6 +139,18 @@ class HTTPExecutionModel:
         invalid = str(feedback.get("invalid_review") or "").strip()
         if invalid:
             parts.append(f"The previous review could not be used: {invalid}\n")
+        patch_error = str(feedback.get("invalid_patch") or "").strip()
+        if patch_error:
+            parts.append(
+                "The previous change could not be applied safely; return a new complete diff "
+                f"that applies to the files above:\n{patch_error}\n"
+            )
+        test_failure = str(feedback.get("test_failure") or "").strip()
+        if test_failure:
+            parts.append(
+                "The project's tests failed for the previous change. Fix the code so they pass:\n"
+                + test_failure[-8000:] + "\n"
+            )
         parts.append("Return ONLY a NEW complete unified diff (one or more files). No prose outside the diff.")
         return _extract_code_block(self.client.post("".join(parts)))
 
@@ -141,12 +159,14 @@ class HTTPReviewModel:
     def __init__(self, client: ChatClient):
         self.client = client
 
-    def review(self, req: dict, project: dict, plan: str, diff: str, rule_ids: list[str]) -> dict:
+    def review(self, req: dict, project: dict, plan: str, diff: str, rule_ids: list[str],
+               tests: str | None = None) -> dict:
         prompt = (
             "You are the Review Model. Judge the proposed change against each rule, one by one.\n"
             + _docs_block(project)
             + f"Request: {req['text']}\n\nPlan:\n{plan}\n\nDiff:\n{diff}\n\n"
-            "Rules to judge: " + ", ".join(rule_ids) + "\n"
+            + (f"Test results from the project's test command:\n{tests}\n\n" if tests else "")
+            + "Rules to judge: " + ", ".join(rule_ids) + "\n"
             "Return exactly one verdict for every rule listed above and no other rule id.\n"
             "Reply with ONLY a JSON object: {\"verdicts\": {\"<rule-id>\": {\"status\": \"pass\"|\"fail\", \"reason\": \"...\"}}}."
         )

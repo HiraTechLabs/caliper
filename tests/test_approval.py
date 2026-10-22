@@ -6,13 +6,14 @@ from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
 from caliper.workflow import Workflow
 from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel, RecordingDeployAdapter
-from tests.support import complete_setup
+from tests.support import attach_real_repo, complete_setup
 
 
 @pytest.fixture()
 def setup(tmp_path):
     registry = ProjectRegistry(tmp_path / "projects")
     registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    attach_real_repo(tmp_path, registry, "shop-api")
     complete_setup(registry, "shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
     workflow = Workflow(
@@ -21,7 +22,7 @@ def setup(tmp_path):
         deploy=RecordingDeployAdapter(),
     )
     client = TestClient(create_app(registry=registry, requests=requests, workflow=workflow))
-    return client, tmp_path, requests
+    return client, tmp_path, requests, workflow
 
 
 def _make_awaiting(client):
@@ -30,7 +31,7 @@ def _make_awaiting(client):
 
 
 def test_approval_gate_buttons_and_full_path_to_live(setup):
-    client, _, _ = setup
+    client, _, _, _ = setup
     _make_awaiting(client)
 
     page = client.get("/requests/req-1")
@@ -46,16 +47,20 @@ def test_approval_gate_buttons_and_full_path_to_live(setup):
     assert "Merged and deployed to Prod. Nothing left to do." in final.text
 
 
-def test_merge_marker_written_on_approve(setup):
-    client, tmp_path, _ = setup
+def test_approval_performs_a_real_merge_and_push(setup):
+    client, _, _, workflow = setup
     _make_awaiting(client)
-    client.post("/requests/req-1/approve", follow_redirects=True)
-    assert (tmp_path / "projects" / "shop-api" / "req-1" / "merged.marker").is_file()
-    assert (tmp_path / "projects" / "shop-api" / "req-1" / "deploy-dev.log").is_file()
+    response = client.post("/requests/req-1/approve", follow_redirects=True)
+    assert response.status_code == 200
+    stored = workflow.requests.get("req-1")
+    assert stored["status"] == "deployed_dev"
+    assert stored["merge_commit"]
+    assert (workflow.artifact_dir("req-1") / "merge-commit.txt").is_file()
+    assert (workflow.artifact_dir("req-1") / "deploy-dev.log").is_file()
 
 
 def test_request_changes_returns_to_execution_with_note(setup):
-    client, _, requests = setup
+    client, _, requests, _ = setup
     _make_awaiting(client)
 
     response = client.post("/requests/req-1/changes", data={"note": "Validate refund input first"}, follow_redirects=True)
@@ -68,7 +73,7 @@ def test_request_changes_returns_to_execution_with_note(setup):
 
 
 def test_request_changes_requires_note(setup):
-    client, _, _ = setup
+    client, _, _, _ = setup
     _make_awaiting(client)
     response = client.post("/requests/req-1/changes", data={"note": "  "})
     assert response.status_code == 422
@@ -80,6 +85,7 @@ def test_without_a_deploy_adapter_the_page_says_it_is_not_configured(tmp_path):
 
     registry = ProjectRegistry(tmp_path / "projects")
     registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    attach_real_repo(tmp_path, registry, "shop-api")
     complete_setup(registry, "shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
     workflow = Workflow(
@@ -98,7 +104,7 @@ def test_without_a_deploy_adapter_the_page_says_it_is_not_configured(tmp_path):
 
 
 def test_invalid_transitions_rejected_with_guidance(setup):
-    client, _, _ = setup
+    client, _, _, _ = setup
     client.post("/projects/shop-api/requests/new", data={"kind": "feature", "text": "x", "extra": ""})
     response = client.post("/requests/req-1/approve")
     assert response.status_code == 422

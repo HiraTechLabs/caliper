@@ -19,7 +19,7 @@ requires_ssh_keyscan = pytest.mark.skipif(
 )
 
 
-def make_git_repo(path: Path, branch: str = "main") -> str:
+def make_git_repo(path: Path, branch: str = "main", files: dict[str, str] | None = None) -> str:
     """Create a local bare repository with one commit; returns its file:// URL."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -33,6 +33,10 @@ def make_git_repo(path: Path, branch: str = "main") -> str:
         check=True, capture_output=True,
     )
     (work / "README.md").write_text("# project\n", encoding="utf-8")
+    for relative, content in (files or {}).items():
+        target = work / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
     subprocess.run(["git", "-C", str(work), "add", "."], check=True, capture_output=True)
     subprocess.run(
         ["git", "-C", str(work), "-c", "user.name=Caliper", "-c", "user.email=caliper@localhost",
@@ -46,6 +50,33 @@ def make_git_repo(path: Path, branch: str = "main") -> str:
         ["git", "-C", str(work), "push", "-q", "origin", branch], check=True, capture_output=True
     )
     return path.as_uri()
+
+
+def attach_repository(registry, project_id: str, repo_url: str, branch: str = "main") -> None:
+    """Point a registry project at a real local remote for workflow tests."""
+    path = registry.projects_root / project_id / "manifest.yaml"
+    manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+    manifest["repo"]["url"] = repo_url
+    manifest["repo"]["verified"] = True
+    manifest["repo"]["test_message"] = "Read and write access verified."
+    manifest["repo"]["default_branch"] = branch
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+
+def make_project_repo(tmp_path, project_id: str, test_command: str = "true",
+                      files: dict[str, str] | None = None) -> str:
+    """Create a real local remote whose .caliper/manifest.yaml carries a test command."""
+    all_files = {".caliper/manifest.yaml": f"id: {project_id}\ntest_command: \"{test_command}\"\n"}
+    all_files.update(files or {})
+    return make_git_repo(tmp_path / "remotes" / project_id, files=all_files)
+
+
+def attach_real_repo(tmp_path, registry, project_id: str, test_command: str = "true",
+                     files: dict[str, str] | None = None, branch: str = "main") -> str:
+    """Create a real local remote and point the registry project at it."""
+    url = make_project_repo(tmp_path, project_id, test_command=test_command, files=files)
+    attach_repository(registry, project_id, url, branch=branch)
+    return url
 
 
 def _approved_principles(manifest: dict) -> None:

@@ -52,6 +52,13 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-043 | 2026-10-22 | `.caliper/` is the single home for Caliper's own decisions, graph and manifest | (this) |
 | D-044 | 2026-10-22 | `docs/UI_SYSTEM.md` v2 is the only UI spec; the current Jinja UI is transitional | (this) |
 | D-045 | 2026-10-22 | Graph and README descriptions state current behavior, not planned behavior | (this) |
+| D-046 | 2026-10-22 | One request worktree under `projects/<id>/worktrees/<req>`, branch `caliper/<req>`, reset to base per attempt | (this) |
+| D-047 | 2026-10-22 | Execution runs against the worktree; Caliper computes and validates the authoritative Git diff | (this) |
+| D-048 | 2026-10-22 | A mandatory test command from `.caliper/manifest.yaml` gates review and consumes the loop limit | (this) |
+| D-049 | 2026-10-22 | Approval is bound to the reviewed commit SHA and diff hash; stale approvals are refused | (this) |
+| D-050 | 2026-10-22 | Approval performs a real no-force Git merge and push; failures mark the request failed | (this) |
+| D-051 | 2026-10-22 | Git evidence and interruption recovery are persisted; retries reuse and reset one worktree | (this) |
+| D-052 | 2026-10-22 | The request page shows test output, branch, reviewed commit and merge commit | (this) |
 
 ## Entries
 
@@ -680,3 +687,137 @@ Format: id, date, decision, reason, alternatives rejected.
   false graph in the meantime); deleting descriptions to avoid staleness (they are the reason
   the graph is useful); describing planned behavior with a "planned" label (the prompt does
   not distinguish plan from fact).
+
+### D-046 — One request worktree under `projects/<id>/worktrees/<req>`, branch `caliper/<req>`
+- **Decision:** `RequestWorkspaceService` (new `caliper/workspace.py`) clones/syncs the
+  project repository through the existing `GitRepo` and creates exactly one Git worktree per
+  request at `projects/<project id>/worktrees/<request id>` on branch `caliper/<request id>`
+  (the branch convention D-031 already established). The branch is cut from the clone's HEAD
+  immediately after a fresh `sync()` of the default branch. Before every execution attempt the
+  worktree is hard-reset to the recorded `base_commit` and cleaned of untracked files, so a retry
+  replaces the previous attempt instead of layering on top of it. The worktree is removed after
+  a successful merge and when a request is deleted; project deletion removes the whole project
+  directory, which contains `worktrees/`. Stale worktrees/branches left by an interrupted process
+  are removed idempotently before a new attempt starts.
+- **Reason:** Phase 0c requires real isolation and real Git state (PLAN_P1 2c.1). Keeping the
+  worktree inside the project directory keeps the existing safe-deletion boundary
+  (`CALIPER_DATA_DIR/projects/<id>`) and keeps the project's base clone untouched while an agent
+  edits. Resetting to the base commit is what makes retries safe: a failed attempt cannot leak
+  into the next one, and a review can only ever see one self-contained change.
+- **Alternatives rejected:** editing the project clone directly (unrelated user changes and the
+  default branch would be at risk); a per-attempt worktree (branch/commit history becomes
+  ambiguous and cleanup multiplies); a worktree outside the project directory (escapes the
+  audited deletion boundary and the existing graph/deletion assumptions).
+
+### D-047 — Execution runs against the worktree; Caliper computes and validates the authoritative Git diff
+- **Decision:** The Execution role runs inside the request worktree. Two provider shapes are
+  supported behind the existing role boundary:
+  - **HTTP (no tools):** the prompt includes a size-capped repository tree plus the contents of
+    files the plan names, and asks for one complete unified diff. Caliper validates it with
+    `patch_safety.validate_patch`, applies it with `git apply --check` then `git apply` inside the
+    worktree, and then computes the real diff from Git.
+  - **OpenCode:** the client runs with `cwd` set to the worktree and is asked to edit files and
+    run the project's tests, not to print a diff. Caliper stages the resulting edits and computes
+    the diff from Git itself. `--auto` is still never passed.
+  In both cases the diff the reviewer sees is `git diff <base> <commit>` from the worktree, never
+  a model-returned string. Empty, overlarge, binary, absolute-path, traversal, backslash and
+  `.git`-internal changes are rejected before they can reach the project state. The adapter
+  interface keeps `execute(...)` for diff-producing adapters and adds an optional
+  `execute_in_workspace(..., workspace=...)` for adapters that edit files directly.
+- **Reason:** The previous loop reviewed model text that was never applied anywhere, so review
+  and approval had no relationship to the repository. The authoritative artifact must be the Git
+  diff of the isolated branch. HTTP models have no filesystem tools, so they must receive code
+  context; OpenCode has tools and must use them in the isolated worktree. `patch_safety` was
+  already the reviewed, tested boundary (D-031); this wires it in rather than duplicating it.
+- **Alternatives rejected:** asking OpenCode for a diff (it can edit the worktree, and its diff
+  text would be a second, unverified source of truth); applying model diffs without `patch_safety`
+  (path traversal and binary changes); letting HTTP Execution claim success by returning prose
+  (no verifiable diff); running OpenCode with `cwd=None` (it would edit Caliper's own tree).
+
+### D-048 — A mandatory test command from `.caliper/manifest.yaml` gates review
+- **Decision:** After a change is applied and committed on the request branch, Caliper reads
+  `test_command` from the project repository's `.caliper/manifest.yaml` and runs it in the
+  worktree with a bounded timeout (900 s). The combined stdout/stderr (capped) is stored as the
+  request's test evidence and is included in the review input. A failing test is fed back to
+  Execution (together with the human note and any failed rule verdicts), consumes the same
+  three-attempt limit as a failed review, and is shown on the request page. A project without
+  `test_command` fails with a plain reason instead of pretending the change was tested.
+  Caliper's own `.caliper/manifest.yaml` records `test_command: pytest`. The command is
+  human-authored in the project repository and runs with the shell so commands such as `pytest -q`
+  work as written. The command is read from the recorded base commit (`git show
+  <base>:.caliper/manifest.yaml`), not from the attempt being tested, so a change cannot weaken
+  or replace its own test gate.
+- **Reason:** PLAN_P1 2c.3 makes the test gate part of the loop. A change that was never tested
+  must not reach a human approval screen as if it were. Reusing the review loop limit avoids a
+  second, independent retry budget that could hide a non-converging change.
+- **Alternatives rejected:** a per-project command in Caliper's local runtime manifest (Git is the
+  source of truth for project definitions); silently skipping when no command exists (fake
+  success); running tests only after approval (too late); a separate test retry limit (violates
+  the documented three-loop limit).
+
+### D-049 — Approval is bound to the reviewed commit SHA and diff hash
+- **Decision:** When a review passes, the workflow records the request branch, worktree path,
+  base commit, reviewed commit SHA and SHA-256 of the exact `git diff base..commit` it reviewed.
+  `approve_merge` refuses unless the request is still `awaiting_approval`, the review file covers
+  exactly the currently approved rule IDs with no failed verdict, the worktree still exists, its
+  HEAD is the recorded reviewed commit, the diff hash matches, and the worktree has no
+  uncommitted changes. Any mismatch marks the request `failed` with the reason and performs no
+  merge. The human page cannot approve a request that never passed review because the status
+  transition happens only after a valid passing review.
+- **Reason:** AGENTS.md and PLAN_P1 require that approval authorize the actual change. A status
+  flag alone would let a branch change after review and still be merged under the old approval.
+  Recording and re-checking the commit/diff hash is the smallest deterministic binding; it needs
+  no new dependency and no model judgement.
+- **Alternatives rejected:** approving by status only (a stale branch would merge); trusting the
+  model's diff text (it is not the applied Git state); re-running review at approval time (the
+  human approved a specific verdict, not a new one); editing the branch after approval (must
+  require a new review).
+
+### D-050 — Approval performs a real no-force Git merge and push
+- **Decision:** `approve_merge` syncs the project clone to the remote default branch, verifies
+  the reviewed commit, runs `git merge --no-ff --no-edit caliper/<req>`, records the resulting
+  merge commit SHA, and pushes `HEAD:refs/heads/<default>` with the project deploy key. It never
+  force-pushes. A merge conflict aborts the merge and resets the clone to its pre-merge state; a
+  rejected push resets the local default branch to the remote head; both mark the request
+  `failed` with the exact Git reason and leave the request branch/worktree in place for
+  inspection. `merged.marker` is no longer written: a request is `merged` only after the push
+  succeeded, and the merge commit SHA plus `merge-commit.txt` are the evidence.
+- **Reason:** PLAN_P1 2c.5 requires a real merge on approval and explicit failure states for
+  conflicts and rejected pushes. The user must never see success when Git failed. A marker file
+  was explicitly identified as fake evidence.
+- **Alternatives rejected:** merging the worktree without pushing (the remote would not contain
+  the change); force-pushing after rejection (destroys remote history); marking `merged` on a
+  local merge but a failed push (false success); keeping `merged.marker` as a second source of
+  truth (contradicts the evidence rule).
+
+### D-051 — Git evidence and interruption recovery are persisted; retries reset one worktree
+- **Decision:** `requests` gains `branch`, `worktree`, `base_commit`, `commit_sha`, `diff_hash`,
+  `merge_commit` and `failure_reason` columns (migrated in place for existing SQLite files).
+  A failure writes `failure.txt` in the request artifact directory and sets `failure_reason`;
+  a successful review clears `failure_reason`. Starting the app marks any request left in
+  `planning`, `executing` or `reviewing` as `failed` with an "interrupted" reason. Re-running any
+  execution attempt resets the same worktree to `base_commit`; a stale worktree/branch from an
+  earlier process is removed before a fresh one is created. Request deletion removes the
+  request's worktree and branch as well as its artifacts.
+- **Reason:** PLAN_P1 section D requires failures to leave a known, recoverable state. SQLite is
+  run state (deletable), Git is the source of truth; both must name the same commit. Without
+  persisted commit information, a page reload or restart could not prove what was reviewed.
+  Without a reset, a retry could duplicate a change or fail because the previous attempt is still
+  in the tree.
+- **Alternatives rejected:** storing evidence only in files (the request row could claim a
+  different state after a manual edit); creating a new worktree per retry (branch history and
+  cleanup ambiguity); leaving in-flight requests stuck forever after a restart (the human cannot
+  tell whether anything is running); deleting a worktree before its request row (the row would
+  point at missing state).
+
+### D-052 — The request page shows test output, branch, reviewed commit and merge commit
+- **Decision:** The request detail page gains a Tests section (pass/fail plus the capped output)
+  and a compact Git evidence line showing the request branch, reviewed commit SHA and, once
+  merged, the merge commit SHA. A failure shows the stored `failure_reason` instead of the old
+  review-only wording. SSE payloads include the same fields so a live update does not lose them.
+- **Reason:** AGENTS.md 7 requires each screen to say what state it is in and what can happen
+  next; PLAN_P1 2c.3 and 2c.5 require the test result and merge commit to be visible. Evidence
+  that only exists in SQLite is not visible to the human approving the change.
+- **Alternatives rejected:** showing only "merged" (cannot distinguish a real push from an old
+  marker); a separate diagnostics page (the approval screen must contain the evidence); raw
+  unbounded test output (unreadable page and unbounded prompt growth).

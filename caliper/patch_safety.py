@@ -1,11 +1,11 @@
 """Safe handling of model-produced unified diffs.
 
-The Execution role currently returns a unified diff as text; nothing in the
-runtime applies it yet (see D-031). This module is the tested primitive the
-workflow will use later:
+``RequestWorkspaceService`` uses this module for every model-produced change
+(see D-046 and D-047):
 
 - ``validate_patch`` statically rejects absolute paths, path traversal, binary
-  changes, and empty or malformed output before anything touches the disk.
+  changes, ``.git`` internals, and empty or malformed output before anything
+  touches the disk.
 - ``apply_patch`` applies a validated diff through ``git apply`` (arranged check
   first, then apply) inside one target worktree, via an argv array with a
   bounded timeout — never a shell.
@@ -14,8 +14,7 @@ workflow will use later:
   request, never the default branch).
 
 Known limitation, recorded in D-031: symlink and rename oddities rely on
-``git apply``'s own defaults; no reviewer-facing test run or merge wiring is
-implemented here yet.
+``git apply``'s own defaults.
 """
 
 import re
@@ -71,6 +70,8 @@ def _check_target(path: str) -> None:
         raise PatchError(f"The patch modifies a path outside the project root: {path}")
     if any(part in ("", ".") for part in parts[1:]):
         raise PatchError(f"The patch contains an unusual path component: {path}")
+    if any(part == ".git" for part in parts):
+        raise PatchError(f"The patch may not modify Git internals: {path}")
 
 
 def _collect_paths(diff: str) -> list[str]:
@@ -166,14 +167,22 @@ def remove_worktree(repo_root: Path, req_id: str, worktrees_root: Path, timeout:
     """Remove one isolated worktree (and its branch) after a request ends.
 
     ``worktrees_root`` must be the same root that ``create_worktree`` used.
+    Safe to call for a request that has no worktree or branch.
     """
     repo_root = Path(repo_root)
     branch = request_branch(req_id)
     path = Path(worktrees_root) / req_id
+    _run(["git", "worktree", "prune"], cwd=repo_root, timeout=timeout)
+    if path.is_symlink():
+        raise PatchError(f"The worktree path is a symlink; refusing to remove it: {path}")
     if path.exists():
         code, output = _run(["git", "worktree", "remove", "--force", str(path)], cwd=repo_root, timeout=timeout)
-        if code != 0 and "already removed" not in output.lower():
+        if code != 0 and "already removed" not in output.lower() and not path.exists():
             raise PatchError(f"Cannot remove the worktree for {branch}: {output or 'git worktree remove failed'}")
-    code, output = _run(["git", "branch", "-D", branch], cwd=repo_root, timeout=timeout)
+    code, output = _run(["git", "branch", "--list", branch], cwd=repo_root, timeout=timeout)
     if code != 0:
-        raise PatchError(f"Cannot delete the branch {branch}: {output or 'git branch -D failed'}")
+        raise PatchError(f"Cannot inspect the branch {branch}: {output or 'git branch --list failed'}")
+    if output.strip():
+        code, output = _run(["git", "branch", "-D", branch], cwd=repo_root, timeout=timeout)
+        if code != 0:
+            raise PatchError(f"Cannot delete the branch {branch}: {output or 'git branch -D failed'}")

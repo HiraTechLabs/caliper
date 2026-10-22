@@ -12,9 +12,9 @@
 {{ factory_floor(req.status) }}
 
 {% if req.status == 'failed' %}
-<div class="alert danger" data-failed-alert>Review failed {{ req.loop_count + 1 }} times. The workflow stopped and needs your call: edit the plan by hand or reject the request.</div>
+<div class="alert danger" data-failed-alert>{% if req.failure_reason %}{{ req.failure_reason }}{% else %}Review failed {{ req.loop_count + 1 }} times. The workflow stopped and needs your call: edit the plan by hand or reject the request.{% endif %}</div>
 {% else %}
-<div class="alert danger" data-failed-alert hidden>Review failed. The workflow stopped and needs your call: edit the plan by hand or reject the request.</div>
+<div class="alert danger" data-failed-alert hidden>The workflow stopped. The reason is recorded on the request.</div>
 {% endif %}
 <div class="note" data-review-note {% if not req.review_note %}hidden{% endif %}>Human feedback: <span data-review-note-text>{{ req.review_note or '' }}</span></div>
 
@@ -86,6 +86,30 @@
   <h2>Changes</h2>
   <pre class="diff"><code data-diff-content>{{ artifacts.diff or '' }}</code></pre>
 </section>
+
+{% if test_status or artifacts.tests %}
+<section class="detail-section" data-tests-section>
+  <h2>Tests</h2>
+  <p class="muted" data-test-status>
+    {% if test_status == 'passed' %}The project's test command passed in the request worktree.
+    {% elif test_status == 'failed' %}The project's test command failed in the request worktree.
+    {% else %}Test output from the request worktree.{% endif %}
+  </p>
+  <pre class="principle-content" data-test-output>{{ artifacts.tests or '' }}</pre>
+</section>
+{% endif %}
+
+{% if req.branch %}
+<section class="detail-section" data-git-evidence>
+  <h2>Git evidence</h2>
+  <ul class="rule-list">
+    <li class="card rule-row"><span class="mono rule-id">Branch</span><span class="mono">{{ req.branch }}</span></li>
+    {% if req.base_commit %}<li class="card rule-row"><span class="mono rule-id">Base</span><span class="mono">{{ req.base_commit }}</span></li>{% endif %}
+    {% if req.commit_sha %}<li class="card rule-row"><span class="mono rule-id">Reviewed commit</span><span class="mono">{{ req.commit_sha }}</span></li>{% endif %}
+    {% if req.merge_commit %}<li class="card rule-row"><span class="mono rule-id">Merge commit</span><span class="mono">{{ req.merge_commit }}</span></li>{% endif %}
+  </ul>
+</section>
+{% endif %}
 
 <div class="form-actions" data-action-area>
   {% if req.status == 'submitted' %}

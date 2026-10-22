@@ -6,7 +6,7 @@ from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
 from caliper.workflow import Workflow
 from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel
-from tests.support import complete_setup
+from tests.support import attach_real_repo, complete_setup
 
 
 @pytest.fixture()
@@ -60,6 +60,7 @@ def test_global_composer_submit_creates_and_redirects(bare):
 def test_status_snapshot_reports_pipeline_state(bare):
     client, registry, tmp_path = bare
     registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    attach_real_repo(tmp_path, registry, "shop-api")
     complete_setup(registry, "shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
     workflow = Workflow(

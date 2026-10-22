@@ -47,6 +47,9 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
         project_docs = ProjectDocsService(registry)
     bus = EventBus()
     requests.on_change = lambda change, req: bus.publish({"change": change, "id": req["id"], "request": req})
+    requests.mark_interrupted(
+        "Caliper restarted while this request was running. Its in-flight state is unknown; run it again."
+    )
     if project_deleter is None:
         project_deleter = ProjectDeleter(registry, requests, data_dir)
 
@@ -95,7 +98,8 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
     def _request_payload(req: dict, include_artifacts: bool = False) -> dict:
         entry = {key: req[key] for key in (
             "id", "project_id", "kind", "text", "status", "loop_count",
-            "review_note", "created_at", "updated_at",
+            "review_note", "branch", "base_commit", "commit_sha", "merge_commit",
+            "failure_reason", "created_at", "updated_at",
         )}
         try:
             artifact_dir = workflow.artifact_dir(req["id"])
@@ -123,6 +127,12 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
         if req["status"] in IN_FLIGHT_STATUSES:
             raise RequestDeleteError(
                 f"Request {req['id']} is {req['status']}. Wait for it to stop before deleting it."
+            )
+        try:
+            workflow.discard_workspace(req["id"])
+        except Exception as exc:
+            raise RequestDeleteError(
+                f"Refusing to delete request {req['id']}: its worktree could not be removed: {exc}"
             )
         raw = workflow.artifact_dir(req["id"])
         if raw.is_symlink():
@@ -286,7 +296,13 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             return templates.TemplateResponse(request, "request_missing.html", _ui_ctx(req_id=req_id), status_code=404)
         artifacts = {}
         artifacts_dir = workflow.artifact_dir(req_id)
-        for name, key in (("plan.md", "plan"), ("diff.patch", "diff"), ("review.json", "review")):
+        for name, key in (
+            ("plan.md", "plan"),
+            ("diff.patch", "diff"),
+            ("review.json", "review"),
+            ("test-output.txt", "tests"),
+            ("merge-commit.txt", "merge"),
+        ):
             path = artifacts_dir / name
             if path.is_file():
                 artifacts[key] = path.read_text(encoding="utf-8")
@@ -301,9 +317,14 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             review_error_path.read_text(encoding="utf-8").strip()
             if review_error_path.is_file() else None
         )
+        test_status_path = artifacts_dir / "test-status.txt"
+        test_status = (
+            test_status_path.read_text(encoding="utf-8").strip()
+            if test_status_path.is_file() else None
+        )
         return templates.TemplateResponse(request, "request_detail.html", _ui_ctx(
             req=req, artifacts=artifacts, failed=failed, passed=passed, verdicts=verdicts,
-            review_error=review_error,
+            review_error=review_error, test_status=test_status,
             delete_error=request.query_params.get("delete_error"),
         ))
 

@@ -105,6 +105,65 @@ class OpenCodeClient:
         return f"OpenCode failed with exit code {returncode}. {detail or 'No error output.'}"
 
 
+class OpenCodeExecutionModel:
+    """Execution that edits the request worktree directly and returns no diff.
+
+    Caliper computes the authoritative diff from Git after this call (D-047).
+    The prompt explicitly forbids commits and paths outside the worktree.
+    """
+
+    def __init__(self, client: OpenCodeClient):
+        self.client = client
+
+    def execute(self, req: dict, project: dict, plan: str, feedback: dict | None = None) -> str:
+        raise OpenCodeAdapterError(
+            "The OpenCode Execution role edits the request worktree; it must be run with a workspace."
+        )
+
+    def execute_in_workspace(self, req: dict, project: dict, plan: str, feedback: dict | None,
+                             workspace) -> None:
+        from caliper.http_models import _docs_block
+
+        feedback = feedback or {}
+        failed = feedback.get("failed_rules") or {}
+        note = str(feedback.get("human_note") or "").strip()
+        parts = [
+            "You are the Execution Model of a private software factory.\n"
+            "You are working inside an isolated Git worktree for one request. "
+            "Edit the files in the current working directory to implement the plan. "
+            "Do not commit, do not push, and do not touch files outside the working directory.\n"
+            f"Project: {project['id']}\n"
+            + _docs_block(project)
+            + f"Request: {req['text']}\nPlan:\n{plan}\n"
+        ]
+        if failed:
+            parts.append(
+                "The previous review failed these rules; fix every one of them:\n"
+                + "\n".join(f"- {rid}: {v.get('reason', '')}" for rid, v in failed.items())
+                + "\n"
+            )
+        if note:
+            parts.append(f"The human asked for these changes:\n{note}\n")
+        invalid = str(feedback.get("invalid_review") or "").strip()
+        if invalid:
+            parts.append(f"The previous review could not be used: {invalid}\n")
+        patch_error = str(feedback.get("invalid_patch") or "").strip()
+        if patch_error:
+            parts.append(f"The previous change was rejected by Caliper's safety checks: {patch_error}\n")
+        test_failure = str(feedback.get("test_failure") or "").strip()
+        if test_failure:
+            parts.append(
+                "The project's tests failed for the previous change. Fix the code so they pass:\n"
+                + test_failure[-8000:] + "\n"
+            )
+        parts.append(
+            "Run the project's tests in this worktree if you can. "
+            "Do not print a diff; Caliper computes it from your edits."
+        )
+        self.client.cwd = str(workspace)
+        self.client.post("".join(parts))
+
+
 def _text_from_json_lines(raw: str) -> str:
     """Every ``type: text`` line contributes its ``part.text``; parts join in order."""
     parts: list[str] = []

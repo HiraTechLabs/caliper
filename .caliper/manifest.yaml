@@ -3,3 +3,4 @@ name: caliper
 product: null
 repo:
   url: https://github.com/HiraTechLabs/caliper
+test_command: pytest

@@ -17,16 +17,38 @@ nodes:
     kind: domain
     description: >
       Synchronous pipeline submitted -> planning -> executing -> reviewing ->
-      awaiting_approval (or a failed-review loop that re-runs Execution with the
-      failed verdicts and the human note, max 3 executions, then failed) ->
-      approve (writes merged.marker and sets status merged) -> Dev/Prod only when
-      a real deploy adapter is configured, otherwise DeploymentNotConfigured and
-      the status stays merged. There is NO real Git branch, merge or push yet:
-      that is Phase 0c. request_changes re-runs Execution with the human note.
-      Owns artifact paths, review validation (verdicts must cover exactly the
-      approved rule IDs; an invalid review counts as a failed loop and is shown
-      on the request page) and takes the rule IDs of the project from its
-      APPROVED principles.
+      awaiting_approval (or a loop that re-runs Execution with the failed
+      verdicts, the human note and the test output, max 3 executions, then
+      failed). Preparation clones/syncs the project repository and creates one
+      isolated worktree on caliper/<request id>; every attempt resets it to the
+      recorded base commit. After Execution it stages the worktree, computes and
+      validates the AUTHORITATIVE Git diff, commits, runs the project's mandatory
+      test_command, then sends that diff plus the test output to Review.
+      Approval re-checks the reviewed commit SHA, diff hash and a clean worktree,
+      then asks request-workspace for a real `git merge --no-ff` and push. A
+      conflict or rejected push marks the request failed with the exact reason;
+      there is no merged.marker. Dev/Prod run only when a real deploy adapter is
+      configured, otherwise DeploymentNotConfigured keeps the status merged.
+      request_changes re-runs Execution against the same workspace. Owns artifact
+      paths and review validation (verdicts must cover exactly the approved rule
+      IDs; an invalid review counts as a failed loop and is shown on the request
+      page) and takes the rule IDs of the project from its APPROVED principles.
+  - id: request-workspace
+    path: caliper/workspace.py
+    kind: domain
+    description: >
+      RequestWorkspaceService: the only place that touches real Git for a request
+      after planning. Clones/syncs the project repository, creates one worktree
+      per request under projects/<id>/worktrees/<req> on caliper/<req>, resets it
+      to the base commit before every attempt, applies model-produced diffs only
+      through patch_safety, stages and computes the authoritative
+      `git diff --cached <base>`, validates it, commits with Caliper's identity,
+      runs the project's test_command (900 s timeout) inside the worktree, reads
+      the test command from .caliper/manifest.yaml at the base commit, verifies the reviewed
+      commit/diff hash and clean status, performs `git merge --no-ff` plus a push
+      with the deploy key, aborts conflicts, resets on push rejection, builds the
+      size-capped code context for HTTP Execution, and removes worktrees
+      idempotently. It never trusts a model's claim that a change was applied.
   - id: http-model-adapters
     path: caliper/http_models.py
     kind: domain
@@ -53,14 +75,14 @@ nodes:
     path: caliper/patch_safety.py
     kind: domain
     description: >
-      Tested primitives for future repository-aware execution: static patch
-      validation (absolute paths, path traversal, backslash paths, binary and
-      malformed/empty patches rejected), safe application through
+      The only code path that applies a model-produced diff. Static validation
+      rejects absolute paths, path traversal, backslash paths, .git internals,
+      binary changes, and empty/overlarge/malformed output. Application is
       `git apply --check` then `git apply` (argv array, bounded timeout, stdin)
-      inside one target worktree, and per-request isolation with
-      `create_worktree`/`remove_worktree` on the branch `caliper/<request id>`,
-      never the default branch. NOT yet wired into the workflow: this is the
-      tracked follow-up of D-031.
+      inside one target worktree. Per-request isolation helpers create and remove
+      one worktree on caliper/<request id>, never the default branch; removal is
+      idempotent and refuses a symlinked path. Wired into request-workspace
+      (D-031, D-046, D-047).
   - id: models-config
     path: caliper/models_config.py
     kind: domain
@@ -85,8 +107,9 @@ nodes:
     kind: domain
     description: >
       Deploy adapter interface on Workflow, with NO runtime implementation yet.
-      Approval only writes merged.marker and sets status merged (no Git merge);
-      with no adapter configured, Dev/Prod deploy calls raise
+      Approval now performs the real Git merge and push through request-workspace
+      and sets merged only after the push succeeded; there is no marker file.
+      With no adapter configured, Dev/Prod deploy calls raise
       DeploymentNotConfigured ("Deployment is not configured") and the UI shows
       that state instead of faking deployed_dev/live. Test doubles live under
       tests/. The SSH/docker adapter arrives in Phase 2.
@@ -113,9 +136,10 @@ nodes:
     kind: infrastructure
     description: >
       Git access for one project repository through the git CLI and the project
-      deploy key: clone, default branch detection, fetch/reset of that branch,
-      reading a file, and writing + committing + pushing one or many files to the
-      default branch.
+      deploy key: clone, default branch detection, fetch/force-checkout of that
+      branch, reading a file, and writing + committing + pushing one or many
+      files to the default branch. request-workspace reuses this clone for the
+      request branch, the approval merge and the push.
   - id: remote-access
     path: caliper/remote.py
     kind: infrastructure
@@ -141,10 +165,13 @@ nodes:
     kind: data-store
     description: >
       SQLite run state (CALIPER_DB_PATH default .caliper-state/state.sqlite3):
-      request id/kind/text/extra/status/loop_count/review_note plus append-only
+      request id/kind/text/extra/status/loop_count/review_note plus the Git
+      evidence columns branch, worktree, base_commit, commit_sha, diff_hash,
+      merge_commit and failure_reason (migrated in place), and append-only
       audit_events. Publishes committed changes to the event bus and supports
-      single-request delete, cancel/restore, and delete-in-one-transaction. Safely
-      deletable.
+      single-request delete, cancel/restore, delete-in-one-transaction, and
+      mark_interrupted which turns planning/executing/reviewing requests into a
+      visible failure after a restart. Safely deletable.
   - id: event-bus
     path: caliper/events.py
     kind: infrastructure
@@ -174,28 +201,33 @@ nodes:
     path: projects/
     kind: data-store
     description: >
-      Runtime-only project data written by project-registry and workflow-engine:
-      one directory per project (manifest, local clone of the repository,
-      req-<n>/ artifacts). Not committed; location overridable via
-      CALIPER_PROJECTS_ROOT.
+      Runtime-only project data written by project-registry, request-workspace
+      and workflow-engine: one directory per project (manifest, local clone of
+      the repository, worktrees/<req> isolated request worktrees, and req-<n>/
+      artifacts). Not committed; location overridable via CALIPER_PROJECTS_ROOT.
   - id: tests
     path: tests/
     kind: test-suite
     description: >
-      pytest suite (188 passing) covering: scaffold smoke,
-      registry, request state store, request UI flows, workflow engine (success path,
-      review loop exhaustion, validation), workflow UI (run/approve gates),
-      models.yaml validation incl. per-role providers and (provider, model)-aware
-      config, HTTP adapters with fake transport, the OpenCode CLI adapter (argv
+      pytest suite covering: scaffold smoke, registry, request state store,
+      request UI flows, workflow engine (success path, review loop exhaustion,
+      validation), workflow UI (run/approve gates), the real factory loop against
+      temporary bare Git remotes (worktree commit, test gate, authoritative diff
+      review, approval binding, real merge/push, unsafe diffs, conflicts, push
+      rejection, OpenCode workspace edits, an HTTP adapter round trip against a
+      real local HTTP model endpoint, interruption recovery), models.yaml
+      validation incl. per-role providers and (provider, model)-aware config,
+      HTTP adapters with fake transport, the OpenCode CLI adapter (argv
       construction without a shell, timeout, nonzero exit, missing binary,
-      empty/malformed/redacted output), dashboard/global
-      composer/status snapshot, repository access (deploy key, read/write probe),
-      the principles/environments API (states, approval rules, Git round trip
-      against a local repository, SSH key and ssh-copy-id command, host key pinning
-      and a changed host key), project docs (.caliper manifest/graph/decisions Git
-      round trip, invalid graph reporting, docs API/UI, decision authoring, prompt context), safe project
-      deletion and SSE. Real ssh-keygen and ssh-keyscan tests skip with a reason when the
-      tool is absent. Mock role adapters live only here.
+      empty/malformed/redacted output), dashboard/global composer/status
+      snapshot, repository access (deploy key, read/write probe), the
+      principles/environments API (states, approval rules, Git round trip
+      against a local repository, SSH key and ssh-copy-id command, host key
+      pinning and a changed host key), project docs (.caliper
+      manifest/graph/decisions Git round trip, invalid graph reporting, docs
+      API/UI, decision authoring, prompt context), safe project deletion and SSE.
+      Real ssh-keygen and ssh-keyscan tests skip with a reason when the tool is
+      absent. Mock role adapters live only here.
 
 edges:
   - from: app-core
@@ -216,6 +248,18 @@ edges:
   - from: workflow-engine
     to: project-docs
     relation: reads-graph-and-decisions-for-model-context
+  - from: workflow-engine
+    to: request-workspace
+    relation: prepares-tests-reviews-and-merges-through
+  - from: request-workspace
+    to: patch-safety
+    relation: validates-and-applies-model-diffs-through
+  - from: request-workspace
+    to: git-repo-access
+    relation: clones-syncs-merges-and-pushes-through
+  - from: request-workspace
+    to: project-store
+    relation: writes-request-worktrees-under
   - from: project-docs
     to: git-repo-access
     relation: reads-and-writes-project-docs-in
@@ -297,6 +341,9 @@ edges:
   - from: tests
     to: workflow-engine
     relation: tests
+  - from: tests
+    to: request-workspace
+    relation: tests-against-real-temporary-git-remotes
   - from: tests
     to: models-config
     relation: tests

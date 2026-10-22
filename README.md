@@ -148,17 +148,19 @@ CI has exactly three jobs in `.github/workflows/ci.yml`:
 ## Status
 
 The workflow runs end-to-end with configured real models: project setup checklist,
-request intake, planning/execution/review, review loop with a 3-attempt limit, human approval,
-project docs (manifest/graph/decisions) read from the repository and included in model
-prompts, safe project deletion, and SSE request updates. Providers verified against the
-installed services on this machine: Ollama (OpenAI-compatible HTTP) and OpenCode
-(`opencode run --format json`). Patch-safety primitives (validation, safe git-apply,
-per-request worktrees) are in place and tested but not yet wired into the Execution step
-(.caliper/DECISIONS.md D-031).
+request intake, planning, execution inside one isolated worktree, the project's test command
+as a gate, review of the authoritative Git diff, a 3-attempt loop, human approval bound to the
+reviewed commit and diff hash, a real `git merge --no-ff` and push, project docs
+(manifest/graph/decisions) read from the repository and included in model prompts, safe project
+deletion, and SSE request updates. Providers verified against the installed services on this
+machine: Ollama (OpenAI-compatible HTTP) and OpenCode (`opencode run --format json`). The
+execute/test/review/approve path uses real temporary Git repositories in the test suite
+(`tests/test_factory_loop.py`).
 
-Test doubles exist only under `tests/`; the runtime has no mock deploy adapter. **Approval does
-not run a Git merge yet:** it writes `merged.marker` and sets the request to `merged`. Dev and
-Prod are reachable only with a real deploy adapter; otherwise the page says "Deployment is not
-configured" instead of faking `deployed_dev`/`live`. Real Git branch/merge/push, worktree
-execution and SSH/docker deploy are still deferred (Phase 0c and Phase 2; see
-`.caliper/DECISIONS.md` D-031, D-036 and D-017).
+Test doubles exist only under `tests/`; the runtime has no mock deploy adapter. Approval only
+reports `merged` after the merge commit was pushed; conflicts and rejected pushes leave the
+request `failed` with the exact Git reason, and no `merged.marker` is written. Dev and Prod are
+reachable only with a real deploy adapter; otherwise the page says "Deployment is not
+configured" instead of faking `deployed_dev`/`live`. SSH/docker deployment is still deferred
+(Phase 2; see `.caliper/DECISIONS.md` D-036 and D-017). The Git evidence, safety and failure
+decisions are D-046..D-052.

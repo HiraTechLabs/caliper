@@ -8,7 +8,7 @@ from caliper.main import create_app
 from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
 from tests.mock_models import mock_workflow
-from tests.support import complete_setup
+from tests.support import attach_real_repo, complete_setup
 
 
 def test_event_bus_fans_out_and_drops_slow_subscribers():
@@ -35,6 +35,7 @@ def test_request_store_notifies_on_create_and_update(tmp_path):
 def client(tmp_path):
     registry = ProjectRegistry(tmp_path / "projects")
     registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    attach_real_repo(tmp_path, registry, "shop-api")
     complete_setup(registry, "shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
     workflow = mock_workflow(requests, registry, tmp_path / "projects")

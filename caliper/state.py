@@ -17,6 +17,13 @@ CREATE TABLE IF NOT EXISTS requests (
     status TEXT NOT NULL DEFAULT 'submitted',
     loop_count INTEGER NOT NULL DEFAULT 0,
     review_note TEXT,
+    branch TEXT,
+    worktree TEXT,
+    base_commit TEXT,
+    commit_sha TEXT,
+    diff_hash TEXT,
+    merge_commit TEXT,
+    failure_reason TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -28,6 +35,17 @@ CREATE TABLE IF NOT EXISTS audit_events (
     details TEXT NOT NULL
 );
 """
+
+# Columns added after the first schema shipped; migrated in place for existing DBs.
+REQUEST_COLUMNS = {
+    "branch": "TEXT",
+    "worktree": "TEXT",
+    "base_commit": "TEXT",
+    "commit_sha": "TEXT",
+    "diff_hash": "TEXT",
+    "merge_commit": "TEXT",
+    "failure_reason": "TEXT",
+}
 
 
 def _now() -> str:
@@ -44,8 +62,15 @@ class RequestStore:
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._migrate_columns()
         self._conn.commit()
         self.on_change = None
+
+    def _migrate_columns(self) -> None:
+        existing = {row[1] for row in self._conn.execute("PRAGMA table_info(requests)")}
+        for name, declaration in REQUEST_COLUMNS.items():
+            if name not in existing:
+                self._conn.execute(f"ALTER TABLE requests ADD COLUMN {name} {declaration}")
 
     def _notify(self, change: str, req: dict) -> None:
         if self.on_change is None:
@@ -89,7 +114,10 @@ class RequestStore:
         return [dict(r) for r in rows]
 
     def update(self, req_id: str, **fields) -> dict:
-        allowed = {"status", "loop_count", "review_note"}
+        allowed = {
+            "status", "loop_count", "review_note", "branch", "worktree", "base_commit",
+            "commit_sha", "diff_hash", "merge_commit", "failure_reason",
+        }
         unknown = set(fields) - allowed
         if unknown:
             raise ValueError(f"Cannot update fields: {sorted(unknown)}")
@@ -149,6 +177,27 @@ class RequestStore:
         req = dict(row)
         self._notify("deleted", req)
         return req
+
+    def mark_interrupted(self, reason: str) -> list[dict]:
+        """Turn every in-flight request into a visible failure after a restart."""
+        with self._lock:
+            placeholders = ",".join("?" for _ in IN_FLIGHT_STATUSES)
+            rows = self._conn.execute(
+                f"SELECT * FROM requests WHERE status IN ({placeholders})", IN_FLIGHT_STATUSES
+            ).fetchall()
+            previous = [dict(row) for row in rows]
+            if previous:
+                now = _now()
+                self._conn.executemany(
+                    "UPDATE requests SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ?",
+                    [(reason, now, row["id"]) for row in previous],
+                )
+                self._conn.commit()
+        for row in previous:
+            req = self.get(row["id"])
+            if req is not None:
+                self._notify("updated", req)
+        return previous
 
     def delete_project_with_audit(self, project_id: str, project_name: str, details: dict) -> int:
         now = _now()

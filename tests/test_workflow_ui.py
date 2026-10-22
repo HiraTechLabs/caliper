@@ -6,7 +6,7 @@ from caliper.registry import ProjectRegistry
 from caliper.state import RequestStore
 from caliper.workflow import Workflow
 from tests.mock_models import MockExecutionModel, MockPlanningModel, MockReviewModel
-from tests.support import complete_setup
+from tests.support import attach_real_repo, complete_setup
 
 
 class FailingReview(MockReviewModel):
@@ -16,8 +16,8 @@ class FailingReview(MockReviewModel):
 class IncompleteReview(MockReviewModel):
     """Omits one approved rule: the review must be rejected, not accepted."""
 
-    def review(self, req, project, plan, diff, rule_ids):
-        review = super().review(req, project, plan, diff, rule_ids)
+    def review(self, req, project, plan, diff, rule_ids, tests=None):
+        review = super().review(req, project, plan, diff, rule_ids, tests=tests)
         review["verdicts"].pop("SEC-002", None)
         return review
 
@@ -25,6 +25,7 @@ class IncompleteReview(MockReviewModel):
 def _make(tmp_path, review=None):
     registry = ProjectRegistry(tmp_path / "projects")
     registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    attach_real_repo(tmp_path, registry, "shop-api")
     complete_setup(registry, "shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
     workflow = Workflow(
@@ -39,6 +40,7 @@ def _make(tmp_path, review=None):
 def client(tmp_path):
     registry = ProjectRegistry(tmp_path / "projects")
     registry.create_project(name="Shop API", repo_url="https://github.com/example/shop-api")
+    attach_real_repo(tmp_path, registry, "shop-api")
     complete_setup(registry, "shop-api")
     requests = RequestStore(tmp_path / "state.sqlite3")
     workflow = Workflow(
@@ -69,7 +71,7 @@ def test_failed_review_shows_failed_rules_first_and_alert(tmp_path):
     response = client.post("/requests/req-1/run", follow_redirects=True)
     assert response.status_code == 200
     assert "Failed" in response.text
-    assert "3 times" in response.text
+    assert "3 attempts" in response.text
     assert response.text.index("FAIL") < response.text.index("passed - show")
 
 

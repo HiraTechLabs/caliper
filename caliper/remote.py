@@ -17,7 +17,7 @@ class RemoteError(Exception):
 
 
 def _run(command: list[str], cwd: Path | None = None, env: dict | None = None, timeout: float = 45,
-         input_text: str | None = None) -> tuple[int, str]:
+         input_text: str | None = None, max_output: int = 1200) -> tuple[int, str]:
     try:
         completed = subprocess.run(
             command,
@@ -35,7 +35,7 @@ def _run(command: list[str], cwd: Path | None = None, env: dict | None = None, t
     except subprocess.TimeoutExpired:
         return 124, "The command timed out."
     output = "\n".join(part.strip() for part in (completed.stdout, completed.stderr) if part.strip())
-    return completed.returncode, output[-1200:]
+    return completed.returncode, output[-max_output:] if max_output > 0 else output
 
 
 def generate_ed25519_key(path: Path, comment: str) -> str:

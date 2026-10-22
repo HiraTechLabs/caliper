@@ -6,7 +6,7 @@ import yaml
 
 from caliper.http_models import ChatClient, HTTPExecutionModel, HTTPPlanningModel, HTTPReviewModel
 from caliper.opencode_models import DEFAULT_TIMEOUT as OPENCODE_DEFAULT_TIMEOUT
-from caliper.opencode_models import OpenCodeClient
+from caliper.opencode_models import OpenCodeClient, OpenCodeExecutionModel
 
 ROLE_ORDER = ("planning", "execution", "review")
 ROLE_LABELS = {"planning": "Planning", "execution": "Execution", "review": "Review"}
@@ -128,7 +128,10 @@ def make_http_adapters(config: dict, keys: dict | None = None, transports: dict 
                 timeout=entry["timeout"] or DEFAULT_TIMEOUT,
                 transport=transports.get(role),
             )
-        adapters[role] = classes[role](client)
+        if role == "execution" and entry["provider"] == "opencode":
+            adapters[role] = OpenCodeExecutionModel(client)
+        else:
+            adapters[role] = classes[role](client)
     return adapters
 
 

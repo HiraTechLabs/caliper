@@ -18,7 +18,7 @@ class MockExecutionModel:
     def execute(self, req: dict, project: dict, plan: str, feedback: dict | None = None) -> str:
         file_name = "feature_refund.md" if req["kind"] == "feature" else "fix_rounding.md"
         return (
-            f"--- a/{file_name}\n+++ b/{file_name}\n@@ -0,0 +1,3 @@\n"
+            f"--- /dev/null\n+++ b/{file_name}\n@@ -0,0 +1,3 @@\n"
             f"+[mock change for {req['id']}]\n"
             f"+Implements: {req['text']}\n"
             f"+Git source of truth: projects/{project['id']}\n"
@@ -26,7 +26,8 @@ class MockExecutionModel:
 
 
 class MockReviewModel:
-    def review(self, req: dict, project: dict, plan: str, diff: str, rule_ids: list[str]) -> dict:
+    def review(self, req: dict, project: dict, plan: str, diff: str, rule_ids: list[str],
+               tests: str | None = None) -> dict:
         fail = bool(getattr(self, "force_fail", False))
         verdicts = {}
         for rid in rule_ids:
