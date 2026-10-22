@@ -31,6 +31,26 @@ def test_http_executor_extracts_diff_from_code_fence():
     assert diff.startswith("--- a/f") and "```" not in diff
 
 
+def test_http_executor_puts_failed_rules_and_the_human_note_in_the_prompt():
+    stored = []
+    model = HTTPExecutionModel(ChatClient(
+        "m", "http://x/v1", transport=_fake_transport(stored, "--- a/f\n+++ b/f\n@@\n+x"),
+    ))
+
+    model.execute(
+        {"id": "r", "kind": "feature", "text": "t"}, {"id": "p"}, "plan",
+        feedback={
+            "failed_rules": {"SEC-001": {"status": "fail", "reason": "hardcoded password"}},
+            "human_note": "Validate the refund input first",
+        },
+    )
+
+    prompt = stored[0][1]
+    assert "SEC-001" in prompt and "hardcoded password" in prompt
+    assert "Validate the refund input first" in prompt
+    assert "NEW" in prompt
+
+
 def test_http_review_parses_json_and_validates_per_rule():
     payload = '```json\n{"verdicts": {"SEC-001": {"status": "fail", "reason": "b"}}}\n```'
     model = HTTPReviewModel(ChatClient("m", "http://x/v1", transport=lambda c, t: payload))

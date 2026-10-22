@@ -59,9 +59,9 @@ def test_request_changes_returns_to_execution_with_note(setup):
 
     response = client.post("/requests/req-1/changes", data={"note": "Validate refund input first"}, follow_redirects=True)
     assert response.status_code == 200
-    assert "Reviewing" in response.text
+    assert "Awaiting approval" in response.text
     stored = requests.get("req-1")
-    assert stored["status"] == "reviewing"
+    assert stored["status"] == "awaiting_approval"
     assert stored["review_note"] == "Validate refund input first"
     assert "Human feedback" in response.text
 

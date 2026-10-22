@@ -12,6 +12,30 @@ class FailingReview(MockReviewModel):
     force_fail = True
 
 
+class RecordingExecution(MockExecutionModel):
+    """Records the feedback each Execution call receives and marks the revision."""
+
+    def __init__(self):
+        self.feedback_calls = []
+
+    def execute(self, req, project, plan, feedback=None):
+        self.feedback_calls.append(feedback)
+        revision = "v1" if not feedback else "v2"
+        return super().execute(req, project, plan) + f"+Revision: {revision}\n"
+
+
+class OnceFailingReview(MockReviewModel):
+    """Fails the first review, passes every later one."""
+
+    def __init__(self):
+        self.reviews = 0
+
+    def review(self, req, project, plan, diff, rule_ids):
+        self.reviews += 1
+        self.force_fail = self.reviews == 1
+        return super().review(req, project, plan, diff, rule_ids)
+
+
 @pytest.fixture()
 def env(tmp_path):
     registry = ProjectRegistry(tmp_path / "projects")
@@ -84,6 +108,44 @@ def test_failed_review_loops_then_stops_for_human(env):
 
     assert result["status"] == "failed"
     assert result["loop_count"] == MAX_LOOPS - 1
+
+
+def test_a_failed_review_re_runs_execution_with_the_failed_rules(env):
+    registry, requests, _ = env
+    execution = RecordingExecution()
+    workflow = Workflow(
+        requests, registry, env[2].artifacts_root,
+        planning=MockPlanningModel(), execution=execution, review=OnceFailingReview(),
+    )
+    req = requests.create("shop-api", "feature", "Add refund endpoint")
+
+    result = workflow.run(req["id"])
+
+    assert result["status"] == "awaiting_approval"
+    assert len(execution.feedback_calls) == 2
+    assert execution.feedback_calls[0] is None
+    feedback = execution.feedback_calls[1]
+    assert feedback["failed_rules"]["SEC-001"]["reason"].startswith("[mock] SEC-001 violated")
+    assert "+Revision: v2" in (workflow.artifact_dir(req["id"]) / "diff.patch").read_text()
+
+
+def test_request_changes_re_runs_execution_with_the_human_note(env):
+    registry, requests, _ = env
+    execution = RecordingExecution()
+    workflow = Workflow(
+        requests, registry, env[2].artifacts_root,
+        planning=MockPlanningModel(), execution=execution, review=MockReviewModel(),
+    )
+    req = requests.create("shop-api", "feature", "Add refund endpoint")
+    workflow.run(req["id"])
+    assert execution.feedback_calls == [None]
+
+    result = workflow.request_changes(req["id"], "Validate refund input first")
+
+    assert result["status"] == "awaiting_approval"
+    feedback = execution.feedback_calls[-1]
+    assert feedback["human_note"] == "Validate refund input first"
+    assert "+Revision: v2" in (workflow.artifact_dir(req["id"]) / "diff.patch").read_text()
 
 
 def test_run_only_from_submitted(env):

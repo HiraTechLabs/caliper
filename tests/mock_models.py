@@ -15,7 +15,7 @@ class MockPlanningModel:
 
 
 class MockExecutionModel:
-    def execute(self, req: dict, project: dict, plan: str) -> str:
+    def execute(self, req: dict, project: dict, plan: str, feedback: dict | None = None) -> str:
         file_name = "feature_refund.md" if req["kind"] == "feature" else "fix_rounding.md"
         return (
             f"--- a/{file_name}\n+++ b/{file_name}\n@@ -0,0 +1,3 @@\n"

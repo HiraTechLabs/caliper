@@ -101,15 +101,26 @@ class HTTPExecutionModel:
     def __init__(self, client: ChatClient):
         self.client = client
 
-    def execute(self, req: dict, project: dict, plan: str) -> str:
-        prompt = (
+    def execute(self, req: dict, project: dict, plan: str, feedback: dict | None = None) -> str:
+        feedback = feedback or {}
+        failed = feedback.get("failed_rules") or {}
+        note = str(feedback.get("human_note") or "").strip()
+        parts = [
             "You are the Execution Model. Produce code changes for the project on a branch.\n"
             f"Project: {project['id']}\n"
             + _docs_block(project)
             + f"Request: {req['text']}\nPlan:\n{plan}\n"
-            "Return ONLY a unified diff (one or more files). No prose outside the diff."
-        )
-        return _extract_code_block(self.client.post(prompt))
+        ]
+        if failed:
+            parts.append(
+                "The previous review failed these rules; fix every one of them:\n"
+                + "\n".join(f"- {rid}: {v.get('reason', '')}" for rid, v in failed.items())
+                + "\n"
+            )
+        if note:
+            parts.append(f"The human asked for these changes:\n{note}\n")
+        parts.append("Return ONLY a NEW complete unified diff (one or more files). No prose outside the diff.")
+        return _extract_code_block(self.client.post("".join(parts)))
 
 
 class HTTPReviewModel:

@@ -38,6 +38,7 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-029 | 2026-10-21 | OpenCode is integrated through `opencode run --format json` behind OpenCodeClient | (this) |
 | D-030 | 2026-10-21 | Role distinctness stays on the model id; the provider is a transport only | (this) |
 | D-031 | 2026-10-21 | Patch-safety primitives (validate + git apply + per-request worktree); runtime wiring deferred | (this) |
+| D-032 | 2026-10-22 | A failed review re-runs Execution; request_changes calls Execution with the note | (this) |
 
 ## Entries
 
@@ -427,3 +428,18 @@ Format: id, date, decision, reason, alternatives rejected.
   behavior inside the workflow (fake completeness); relying on the model to produce safe paths
   without validation (the model cannot be trusted with the filesystem); `git apply --unsafe-paths`
   or shell execution (never).
+
+### D-032 — A failed review re-runs Execution; request_changes calls Execution with the note
+- **Decision:** When a review returns failed rule verdicts and loops remain, `Workflow`
+  re-runs Execution with the plan, the failed verdicts (`failed_rules`: rule id → status/reason)
+  and the human note, producing a NEW diff that is reviewed again. `request_changes` no longer
+  only flips statuses: it appends the note, calls Execution with it, and reviews the new diff.
+  `Execution.execute` gains an optional `feedback` argument; the HTTP adapter puts the failed
+  rules and the note into its prompt and asks for a new complete diff.
+- **Reason:** The previous loop re-reviewed the same diff, so a failed review could never
+  improve; `request_changes` did not run anything and the human note was shown but never used.
+  That made the review step decorative (PLAN_P1 section 0, item 4).
+- **Alternatives rejected:** reviewing the same diff again (cannot converge, the model sees
+  identical input); letting the human edit the plan by hand (kept as a manual escape hatch, but
+  not the primary path); sending the full review transcript to Execution (larger prompt with no
+  extra signal — only the failed verdicts and the note are sent).

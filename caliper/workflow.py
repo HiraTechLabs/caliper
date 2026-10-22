@@ -56,6 +56,49 @@ class Workflow:
         dir = self.artifacts_root / req["project_id"] / req_id
         return dir
 
+    def _project_context(self, project_id: str) -> dict:
+        project = self.registry.get_project(project_id)
+        project["project_docs"] = (
+            self.docs.read_cached(project_id) if self.docs is not None else {}
+        )
+        return project
+
+    def _feedback(self, req: dict, review: dict | None) -> dict | None:
+        """What Execution must address on a re-run: failed verdicts and the human note."""
+        failed = {}
+        if review is not None:
+            failed = {rid: review["verdicts"][rid] for rid in failed_rules(review)}
+        note = (req.get("review_note") or "").strip()
+        if not failed and not note:
+            return None
+        return {"failed_rules": failed, "human_note": note}
+
+    def _execute(self, req: dict, project: dict, plan: str, feedback: dict | None = None) -> str:
+        return self.execution.execute(req, project, plan, feedback)
+
+    def _review_until_done(self, req: dict, project: dict, plan: str, rule_ids: list[str], diff: str) -> dict:
+        """Review the diff; on a failed review re-run Execution, up to MAX_LOOPS executions."""
+        req_id = req["id"]
+        while True:
+            self.requests.update(req_id, status="reviewing")
+            review = self.review.review(req, project, plan, diff, rule_ids)
+            validate_review(review)
+            dir = self.artifact_dir(req_id)
+            (dir / "review.json").write_text(json.dumps(review, indent=2), encoding="utf-8")
+            (dir / "diff.patch").write_text(diff, encoding="utf-8")
+
+            loops = req["loop_count"]
+            if failed_rules(review) and loops + 1 < MAX_LOOPS:
+                req = self.requests.update(req_id, loop_count=loops + 1)
+                self.requests.update(req_id, status="executing")
+                diff = self._execute(req, project, plan, self._feedback(req, review))
+                continue
+            if failed_rules(review):
+                self.requests.update(req_id, status="failed")
+                return self.requests.get(req_id)
+            self.requests.update(req_id, status="awaiting_approval")
+            return self.requests.get(req_id)
+
     def run(self, req_id: str) -> dict:
         missing = self.missing_models()
         if missing:
@@ -70,10 +113,7 @@ class Workflow:
             raise WorkflowError(
                 "The project has no approved principle rules. Approve the principles first."
             )
-        project = self.registry.get_project(req["project_id"])
-        project["project_docs"] = (
-            self.docs.read_cached(req["project_id"]) if self.docs is not None else {}
-        )
+        project = self._project_context(req["project_id"])
         dir = self.artifact_dir(req_id)
         dir.mkdir(parents=True, exist_ok=True)
 
@@ -82,24 +122,8 @@ class Workflow:
         (dir / "plan.md").write_text(plan, encoding="utf-8")
 
         self.requests.update(req_id, status="executing")
-        diff = self.execution.execute(req, project, plan)
-
-        while True:
-            self.requests.update(req_id, status="reviewing")
-            review = self.review.review(req, project, plan, diff, rule_ids)
-            validate_review(review)
-            (dir / "review.json").write_text(json.dumps(review, indent=2), encoding="utf-8")
-            (dir / "diff.patch").write_text(diff, encoding="utf-8")
-
-            loops = req["loop_count"]
-            if failed_rules(review) and loops + 1 < MAX_LOOPS:
-                req = self.requests.update(req_id, loop_count=loops + 1)
-                continue
-            if failed_rules(review):
-                self.requests.update(req_id, status="failed")
-                return self.requests.get(req_id)
-            self.requests.update(req_id, status="awaiting_approval")
-            return self.requests.get(req_id)
+        diff = self._execute(req, project, plan)
+        return self._review_until_done(req, project, plan, rule_ids, diff)
 
     def _expect(self, req_id: str, *statuses: str) -> dict:
         req = self.requests.get(req_id)
@@ -114,12 +138,16 @@ class Workflow:
         req = self._expect(req_id, "awaiting_approval")
         if not note or not note.strip():
             raise WorkflowError("A note is required when requesting changes.")
-        req = self.requests.update(req_id, status="executing", review_note=note.strip())
+        note = note.strip()
+        req = self.requests.update(req_id, status="executing", review_note=note)
         dir = self.artifact_dir(req_id)
         with (dir / "human-feedback.log").open("a", encoding="utf-8") as f:
-            f.write(note.strip() + "\n")
-        self.requests.update(req_id, status="reviewing")
-        return self.requests.get(req_id)
+            f.write(note + "\n")
+        plan = (dir / "plan.md").read_text(encoding="utf-8")
+        project = self._project_context(req["project_id"])
+        rule_ids = self.registry.approved_rule_ids(req["project_id"])
+        diff = self._execute(req, project, plan, self._feedback(req, None))
+        return self._review_until_done(req, project, plan, rule_ids, diff)
 
     def approve_merge(self, req_id: str) -> dict:
         req = self._expect(req_id, "awaiting_approval")
