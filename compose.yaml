@@ -9,7 +9,7 @@ services:
     restart: unless-stopped
     ports:
       # Loopback only: reach the UI through an SSH tunnel (see README).
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
     environment:
       CALIPER_DATA_DIR: /data
       CALIPER_RUNTIME_DIR: /run/caliper
