@@ -770,6 +770,42 @@ function initDeleteProject() {
   });
 }
 
+function createToast(message) {
+  const toast = document.querySelector("[data-toast]");
+  if (!toast) return;
+  toast.textContent = message;
+  toast.hidden = false;
+  setTimeout(() => { toast.hidden = true; }, 4000);
+}
+
+function initCopyKeys() {
+  document.querySelectorAll("[data-copy-key]").forEach((button) => {
+    const target = document.getElementById(button.dataset.copyKey);
+    if (!target) return;
+    button.addEventListener("click", async () => {
+      const value = target instanceof HTMLTextAreaElement ? target.value : target.textContent;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(value);
+        } else {
+          target.focus();
+          target.select();
+          document.execCommand("copy");
+          target.blur();
+        }
+        createToast("Copied to the clipboard.");
+      } catch (error) {
+        target.focus();
+        target.select();
+        createToast("Copy failed. Press Ctrl+C while the text is selected.");
+      }
+    });
+  });
+}
+
+const GRAPH_KIND_COLORS = ["#3B5BDB", "#7C3AED", "#0891B2", "#D97706", "#16A34A", "#C92A2A", "#0F766E", "#8A57C2"];
+const GRAPH_MAX_NODES_FULLSIZE = 24;
+
 function initToast() {
   const toast = document.querySelector("[data-toast]");
   if (!toast) return;
@@ -784,6 +820,307 @@ function initToast() {
   toast.textContent = message;
   toast.hidden = false;
   setTimeout(() => { toast.hidden = true; }, 7000);
+}
+
+function svgEl(name, attributes = {}) {
+  const element = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
+  return element;
+}
+
+function initGraphView() {
+  const root = document.querySelector("[data-graph-root]");
+  if (!root) return;
+  const raw = document.getElementById("caliper-graph-data");
+  let data = null;
+  try { data = raw ? JSON.parse(raw.textContent) : null; } catch (error) { data = null; }
+  const canvas = root.querySelector("[data-graph-canvas]");
+  const svg = root.querySelector("[data-graph-svg]");
+  const details = root.querySelector("[data-graph-details]");
+  if (!canvas || !svg || !data || !Array.isArray(data.nodes) || !data.nodes.length) {
+    if (canvas) canvas.hidden = true;
+    if (root.querySelector("[data-graph-filters]")) root.querySelector("[data-graph-filters]").hidden = true;
+    return;
+  }
+
+  const nodes = data.nodes.map((node) => ({ ...node, kind: node.kind || "component" }));
+  const edges = data.edges || [];
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const kinds = [...new Set(nodes.map((node) => node.kind))].sort();
+  const kindColors = new Map(kinds.map((kind, index) => [kind, GRAPH_KIND_COLORS[index % GRAPH_KIND_COLORS.length]]));
+
+  const width = 900, height = 560;
+  const center = { x: width / 2, y: height / 2 - 10 };
+  const radius = Math.min(250, 90 + nodes.length * 12);
+  const nodeRadius = nodes.length > GRAPH_MAX_NODES_FULLSIZE ? 12 : 17;
+  const positions = new Map();
+  nodes.forEach((node, index) => {
+    const angle = (index / nodes.length) * Math.PI * 2 - Math.PI / 2;
+    positions.set(node.id, {
+      x: center.x + radius * Math.cos(angle),
+      y: center.y + radius * Math.sin(angle),
+    });
+  });
+
+  const defs = svgEl("defs");
+  const marker = svgEl("marker", {
+    id: "graph-arrow", viewBox: "0 0 10 10", refX: "9", refY: "5",
+    markerWidth: "6", markerHeight: "6", orient: "auto-start-reverse",
+  });
+  marker.appendChild(svgEl("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "var(--border, #7A7A75)" }));
+  defs.appendChild(marker);
+  svg.appendChild(defs);
+  const viewport = svgEl("g", { class: "graph-viewport" });
+  svg.appendChild(viewport);
+
+  const edgeGroup = svgEl("g");
+  viewport.appendChild(edgeGroup);
+  const edgeElements = [];
+  edges.forEach((edge) => {
+    const from = positions.get(edge.from);
+    const to = positions.get(edge.to);
+    if (!from || !to) return;
+    const line = svgEl("line", {
+      x1: from.x, y1: from.y, x2: to.x, y2: to.y,
+      class: "graph-edge", "marker-end": "url(#graph-arrow)",
+    });
+    const title = svgEl("title");
+    title.textContent = `${edge.from} → ${edge.to}${edge.relation ? ` (${edge.relation})` : ""}`;
+    line.appendChild(title);
+    edgeGroup.appendChild(line);
+    edgeElements.push({ element: line, edge });
+  });
+
+  const nodeGroup = svgEl("g");
+  viewport.appendChild(nodeGroup);
+  const nodeElements = new Map();
+  nodes.forEach((node) => {
+    const position = positions.get(node.id);
+    const wrapper = svgEl("g", {
+      class: "graph-node", transform: `translate(${position.x},${position.y})`,
+      tabindex: "0", role: "button",
+      "aria-label": `${node.title} (${node.kind})`,
+    });
+    const color = kindColors.get(node.kind);
+    const circle = svgEl("circle", { r: nodeRadius, fill: color, stroke: color });
+    wrapper.appendChild(circle);
+    const label = svgEl("text", {
+      x: 0,
+      y: nodeRadius + 12,
+      "text-anchor": "middle",
+    });
+    label.textContent = node.title.length > 24 ? `${node.title.slice(0, 23)}…` : node.title;
+    wrapper.appendChild(label);
+    const tooltip = svgEl("title");
+    tooltip.textContent = node.path ? `${node.title} (${node.path})` : node.title;
+    wrapper.appendChild(tooltip);
+    nodeGroup.appendChild(wrapper);
+    nodeElements.set(node.id, wrapper);
+  });
+
+  const viewportState = { x: 0, y: 0, scale: 1 };
+  const applyViewport = () => {
+    viewport.setAttribute(
+      "transform",
+      `translate(${viewportState.x},${viewportState.y}) scale(${viewportState.scale})`,
+    );
+  };
+  applyViewport();
+
+  const zoomAround = (factor, origin) => {
+    const previous = viewportState.scale;
+    const next = Math.min(6, Math.max(0.25, previous * factor));
+    const ratio = next / previous;
+    if (origin) {
+      viewportState.x = origin.x - (origin.x - viewportState.x) * ratio;
+      viewportState.y = origin.y - (origin.y - viewportState.y) * ratio;
+    }
+    viewportState.scale = next;
+    applyViewport();
+  };
+
+  const svgPoint = (event) => {
+    const rect = svg.getBoundingClientRect();
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * width,
+      y: ((event.clientY - rect.top) / rect.height) * height,
+    };
+  };
+
+  root.querySelectorAll("[data-graph-zoom]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.graphZoom;
+      if (action === "in") zoomAround(1.25);
+      else if (action === "out") zoomAround(1 / 1.25);
+      else { viewportState.x = 0; viewportState.y = 0; viewportState.scale = 1; applyViewport(); }
+    });
+  });
+
+  canvas.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    zoomAround(event.deltaY < 0 ? 1.1 : 1 / 1.1, svgPoint(event));
+  }, { passive: false });
+
+  let dragging = null;
+  canvas.addEventListener("pointerdown", (event) => {
+    if (event.target.closest(".graph-node")) return;
+    dragging = { pointer: event.pointerId, start: { x: event.clientX, y: event.clientY }, origin: { ...viewportState } };
+    canvas.setPointerCapture(event.pointerId);
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (!dragging || event.pointerId !== dragging.pointer) return;
+    const rect = svg.getBoundingClientRect();
+    viewportState.x = dragging.origin.x + ((event.clientX - dragging.start.x) / rect.width) * width;
+    viewportState.y = dragging.origin.y + ((event.clientY - dragging.start.y) / rect.height) * height;
+    applyViewport();
+  });
+  const endDrag = (event) => {
+    if (!dragging || event.pointerId !== dragging.pointer) return;
+    dragging = null;
+  };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+
+  canvas.addEventListener("keydown", (event) => {
+    const step = 40 * viewportState.scale;
+    if (event.key === "ArrowLeft") { viewportState.x -= step; }
+    else if (event.key === "ArrowRight") { viewportState.x += step; }
+    else if (event.key === "ArrowUp") { viewportState.y -= step; }
+    else if (event.key === "ArrowDown") { viewportState.y += step; }
+    else if (event.key === "Escape") { clearSelection(); return; }
+    else return;
+    event.preventDefault();
+    applyViewport();
+  });
+
+  const hiddenKinds = new Set();
+  const filters = root.querySelector("[data-graph-filters]");
+  if (filters) {
+    kinds.forEach((kind) => {
+      const label = document.createElement("label");
+      label.className = "graph-filter";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = true;
+      input.addEventListener("change", () => {
+        if (input.checked) hiddenKinds.delete(kind);
+        else hiddenKinds.add(kind);
+        label.classList.toggle("off", !input.checked);
+        updateFilter();
+      });
+      const text = document.createElement("span");
+      text.textContent = kind;
+      label.append(input, text);
+      filters.appendChild(label);
+    });
+  }
+
+  const updateFilter = () => {
+    nodeElements.forEach((wrapper, id) => {
+      const node = nodeById.get(id);
+      wrapper.classList.toggle("is-hidden-kind", hiddenKinds.has(node.kind));
+    });
+    edgeElements.forEach((item) => {
+      item.element.classList.toggle(
+        "is-hidden-kind",
+        hiddenKinds.has(nodeById.get(item.edge.from).kind) || hiddenKinds.has(nodeById.get(item.edge.to).kind),
+      );
+    });
+  };
+
+  const setField = (selector, value) => {
+    const element = details.querySelector(selector);
+    if (!element) return;
+    const fallback = element.dataset.empty || "";
+    if (value) { element.textContent = value; element.removeAttribute("data-empty"); }
+    else { element.textContent = fallback; element.setAttribute("data-empty", fallback); }
+  };
+
+  const clearSelection = () => {
+    nodeElements.forEach((wrapper) => wrapper.classList.remove("is-selected", "is-dimmed"));
+    edgeElements.forEach((item) => item.element.classList.remove("is-related"));
+    if (details) details.hidden = true;
+  };
+
+  const selectNode = (node) => {
+    nodeElements.forEach((wrapper) => wrapper.classList.remove("is-selected", "is-dimmed"));
+    nodeElements.get(node.id).classList.add("is-selected");
+    const related = new Set([node.id]);
+    edgeElements.forEach((item) => {
+      const touches = item.edge.from === node.id || item.edge.to === node.id;
+      item.element.classList.toggle("is-related", touches);
+      if (touches) { related.add(item.edge.from); related.add(item.edge.to); }
+    });
+    nodeElements.forEach((wrapper, id) => {
+      if (!related.has(id)) wrapper.classList.add("is-dimmed");
+    });
+
+    if (!details) return;
+    details.hidden = false;
+    const title = details.querySelector("[data-graph-title]");
+    const id = details.querySelector("[data-graph-id]");
+    const kind = details.querySelector("[data-graph-kind]");
+    setField("[data-graph-path]", node.path || "");
+    setField("[data-graph-description]", node.description || "");
+    title.textContent = node.title;
+    id.textContent = node.id;
+    kind.textContent = node.kind;
+
+    const relations = details.querySelector("[data-graph-relations]");
+    const note = details.querySelector("[data-graph-note]");
+    if (!relations) return;
+    relations.textContent = "";
+    const rows = [];
+    edges.forEach((edge) => {
+      if (edge.from === node.id) rows.push(["outgoing", edge.to, edge.relation]);
+      if (edge.to === node.id) rows.push(["incoming", edge.from, edge.relation]);
+    });
+    if (!rows.length) { if (note) note.hidden = false; return; }
+    if (note) note.hidden = true;
+    rows.forEach(([direction, other, relation]) => {
+      const row = document.createElement("div");
+      row.className = "relation-row";
+      const arrow = document.createElement("span");
+      arrow.className = "relation-arrow mono";
+      arrow.textContent = direction === "outgoing" ? "→" : "←";
+      const button = document.createElement("button");
+      button.type = "button";
+      const otherNode = nodeById.get(other);
+      button.textContent = (otherNode ? otherNode.title : other) + (relation ? ` · ${relation}` : "");
+      button.addEventListener("click", () => selectNode(otherNode || { ...node }));
+      row.append(arrow, document.createTextNode(direction === "outgoing" ? "goes to " : "comes from "), button);
+      relations.appendChild(row);
+    });
+  };
+
+  nodeElements.forEach((wrapper, id) => {
+    wrapper.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const node = nodeById.get(id);
+      const already = wrapper.classList.contains("is-selected");
+      clearSelection();
+      if (!already) selectNode(node);
+      else if (details) details.hidden = true;
+    });
+    wrapper.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectNode(nodeById.get(id));
+      }
+    });
+  });
+
+  svg.addEventListener("click", (event) => {
+    if (!event.target.closest(".graph-node")) clearSelection();
+  });
+
+  const closeButton = details ? details.querySelector("[data-graph-close]") : null;
+  if (closeButton) {
+    closeButton.addEventListener("click", () => {
+      clearSelection();
+      details.hidden = true;
+    });
+  }
 }
 
 function initTheme() {
@@ -803,6 +1140,8 @@ function init() {
   initTheme();
   initToast();
   initDeleteProject();
+  initCopyKeys();
+  initGraphView();
   connectSSE();
 }
 

@@ -75,6 +75,10 @@ Format: id, date, decision, reason, alternatives rejected.
 | D-066 | 2026-10-22 | Caliper is single-instance by design until a later Postgres split | (this) |
 | D-067 | 2026-10-22 | The secret store verifies the master key at startup, before readiness | (this) |
 | D-068 | 2026-10-22 | Every task records its evidence in `docs/WORK_LOG.md` and a canonical `docs/reports/` file | (this) |
+| D-069 | 2026-10-23 | Deploy-key rotation is staged and verified; removal removes only the credential | (this) |
+| D-070 | 2026-10-23 | The project page gains a knowledge workspace with four server-side tab views | (this) |
+| D-071 | 2026-10-23 | Manifest secrets are redacted in the UI; Git stays the untouched source of truth | (this) |
+| D-072 | 2026-10-23 | The workspace graph view renders a normalized copy of graph.yaml with warnings | (this) |
 
 ## Entries
 
@@ -1070,3 +1074,69 @@ Format: id, date, decision, reason, alternatives rejected.
   overwrites earlier evidence (destroys history); CI logs alone (not available for local audits
   and not a readable task narrative); generated placeholder reports (encourage claiming results
   before running them).
+
+### D-069 — Deploy-key rotation is staged and verified; removal removes only the credential
+- **Decision:** replacing a project deploy key happens in two stages. `replace` generates a new
+  ed25519 pair, stores it in the secret store under the same scope with names
+  `deploy_key_replacement`/`deploy_key_replacement.pub`, and shows the new public key while the
+  old key keeps working. `activate` verifies the replacement against the repository through the
+  same injected access test, and only after a verified read+write promotes the pair over
+  `deploy_key`/`deploy_key.pub`, records `rotated_at`, and sets
+  `remote_revocation_pending` (the human must revoke the old key on GitHub's deploy-keys page;
+  no secret store API exists for revocation). `discard` removes only the staged pair. A failing
+  verification keeps the old key active. `DELETE .../repository/key` removes the credentials and
+  the public cache but never the project, its run history or the repository itself. The recorded
+  access level (`access`: write/read/none) comes from the real probe result.
+- **Reason:** the old key is the only working credential until the human adds the new one on
+  GitHub; promoting an unverified key, or regenerating in one step, can lock Caliper out with no
+  undo. Remote revocation is impossible from Caliper, and faking it would hide who must act.
+- **Alternatives rejected:** one-step regenerate (breaks access before the human can add the new
+  key); GitHub API revocation (new cloud dependency, tokens to store); keeping only the map of
+  removal inside project deletion (deletion removes the whole project, which is a different task
+  and needs stronger confirmation).
+
+### D-070 — The project page gains a knowledge workspace with four server-side tab views
+- **Decision:** the transitional Jinja project page replaces the Docs section with one
+  `#workspace` section exposing Principles / Manifest / Decisions / Graph as server-rendered
+  tab views selected by the `?view=` query parameter (default `principles`; unknown values fall
+  back). Docs forms (sync, init, decision) carry a hidden `view` field and redirect back to the
+  active view through a single redirect helper. Anchor aliases (`#principles`, `#docs`) keep
+  redirecting to the section, and existing tests that assert the `#docs` hash stay correct. The
+  Principles tab shows rule chips parsed from the repository content; Decisions are listed
+  newest first with parsed fields.
+- **Reason:** the previous Docs section crammed manifest, graph and decisions onto one long page
+  with raw text blobs. The human asked for one organized workspace on the existing page; server
+  side tabs avoid a second SPA bundle and keep the transitional UI testable.
+- **Alternatives rejected:** a separate Jinja page (loses the setup context and deep links);
+  client-side tabs (requires JS for anything to be reachable and another data payload per visit).
+
+### D-071 — Manifest secrets are redacted in the UI; Git stays the untouched source of truth
+- **Decision:** the project manifest shown on the workspace Manifest tab is a redacted view:
+  sensitive-looking keys (password/secret/token/credential/private-key/api-key/access-key/
+  master-key, matched case-insensitively) render `[redacted]` instead of their values, both in
+  the structured row view (`manifest_rows`/`manifest_workspace`) and in the raw-file pane
+  (`redacted_manifest_text`). A manifest that is not valid YAML is replaced by a single
+  `[redacted] (the manifest is not valid YAML)` line, not an error page. The original file in
+  the repository is never modified by a page load.
+- **Reason:** the manifest is shown on every project-page visit and must never echo credentials
+  into HTML, logs or test snapshots; at the same time the human needs a readable manifest view
+  without switching to the repository. Redaction at the view layer keeps Git authoritative and
+  the operation reversible.
+- **Alternatives rejected:** stripping secret keys from the file on save (destroys user data);
+  showing the values as typed (leaks credentials into terminals and screenshots); asking the
+  human to keep secrets out of the manifest (no enforcement, one pasted token defeats it).
+
+### D-072 — The workspace graph view renders a normalized copy of graph.yaml with warnings
+- **Decision:** the Graph tab renders from `normalize_graph` (graph.yaml → view data): nodes
+  with missing ids are skipped, duplicate ids keep the first occurrence, edges referencing a
+  missing (or dropped) node are dropped, and a graph that is not lists of mappings renders
+  nothing — with each such decision surfaced as a plain-language warning above the canvas
+  instead of failing the page. The page embeds the JSON payload in a
+  `<script id="caliper-graph-data" type="application/json">` tag (with `</` escaped) for the
+  bundled vanilla-JS renderer; graph.yaml in the repository stays untouched.
+- **Reason:** the previous UI either rendered the exact graph shape or showed an error panel and
+  lost the valid part of the architecture. Rendering what is still valid while naming the exact
+  defect tells the human what to fix at a glance, without a page-serving error.
+- **Alternatives rejected:** rejecting the whole graph on any problem (loses the valid part);
+  silently dropping broken entries (hides defects from the one person who can fix them); editing
+  graph.yaml in the repository to "clean it" (the repository is the source of truth).

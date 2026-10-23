@@ -204,7 +204,7 @@ def test_project_page_shows_the_docs_section(app):
     page = client.get("/projects/shop-api")
 
     assert page.status_code == 200
-    assert "Project docs" in page.text
+    assert "Knowledge workspace" in page.text
     assert ".caliper/graph.yaml" in page.text
     assert "Decisions" in page.text
 

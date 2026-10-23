@@ -202,7 +202,11 @@ nodes:
       and append-only .caliper/decisions/*.md in the project repository. Reads the
       local clone for page loads, syncs on demand, creates only missing docs, and
       validates graph node/edge references. Graph and decisions are passed to the
-      model prompts.
+      model prompts. For the UI it produces a normalized graph view (normalize_graph:
+      safe node/edge data plus warnings for missing ids, duplicates and dropped
+      edges), parsed decision fields per file and redacted manifest views
+      (redacted_manifest_text / manifest_rows / manifest_workspace) so secret-looking
+      values never reach the page (D-069..D-072).
   - id: git-repo-access
     path: caliper/repo.py
     kind: infrastructure
@@ -228,15 +232,19 @@ nodes:
     kind: domain
     description: >
       ProjectRegistry: validation + id slug + persistence of the local runtime
-      manifest.yaml (repo url and its verification, optional product field, the state
-      of the six principles, dev/prod environment definitions and host key
-      fingerprint), the per-project deploy key, the per-environment SSH keys and
-      known_hosts files, and the repository/environment connection tests. Private
-      keys are encrypted in the secret store (project/<id>, env/<project>/<env>);
-      public keys are cached under secrets/public/ and only the encrypted-store
-      public key is shown. Key contexts materialize a private key into the runtime
-      tmpfs only for the operation. The portable project manifest lives in
-      .caliper/manifest.yaml in the repository.
+      manifest.yaml (repo url and its verification, optional product field, the
+      state of the six principles, the recorded repository access level, dev/prod
+      environment definitions and host key fingerprint), the per-project deploy
+      key (staged replacement lifecycle: generate a replacement pair, verify it
+      against the repository through an injected tester, promote it over the
+      active pair, or discard; removal of credentials without deleting the
+      project, keeping an updated repo/manifest revision), per-environment SSH
+      keys and known_hosts files, and the repository/environment connection
+      tests. Private keys are encrypted in the secret store (project/<id>,
+      env/<project>/<env>); public keys are cached under secrets/public/ and
+      only the encrypted-store public key is shown. Key contexts materialize a
+      private key into the runtime tmpfs only for the operation. The portable
+      project manifest lives in .caliper/manifest.yaml in the repository.
   - id: request-store
     path: caliper/state.py
     kind: data-store

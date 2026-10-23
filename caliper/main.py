@@ -25,8 +25,8 @@ from caliper.lifecycle import Lifecycle, ShuttingDown
 from caliper.logging_setup import configure_logging
 from caliper.migrate import MigrationError, migrate_legacy
 from caliper.models_config import ROLE_ORDER, ModelsConfigError, ModelsSettings, probe_role
-from caliper.principles import PrinciplesError, PrinciplesService
-from caliper.project_docs import ProjectDocsError, ProjectDocsService
+from caliper.principles import PrinciplesError, PrinciplesService, parse_rules
+from caliper.project_docs import ProjectDocsError, ProjectDocsService, manifest_workspace
 from caliper.registry import ENVIRONMENT_ORDER, ProjectError, ProjectRegistry
 from caliper.secrets import SecretStore
 from caliper.state import ACTIVE_STATUSES, IN_FLIGHT_STATUSES, VALID_KINDS, RequestStore
@@ -587,6 +587,9 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             manifest = registry.get_project(project_id)
         except ProjectError:
             return templates.TemplateResponse(request, "project_missing.html", _ui_ctx(project_id=project_id), status_code=404)
+        view = request.query_params.get("view")
+        if view not in ("principles", "manifest", "decisions", "graph"):
+            view = "principles"
         setup = registry.setup_status(manifest)
         docs = project_docs.read_cached(project_id)
         project_requests = requests.list_for_project(project_id)
@@ -596,6 +599,19 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             )) and registry.environment_key_exists(project_id, env)
             for env in ("dev", "prod")
         }
+        graph_data = None
+        graph_warnings = []
+        if view == "graph" and docs.get("graph") is not None:
+            graph_view = docs["graph_view"]
+            graph_warnings = ([docs["graph_error"]] if docs.get("graph_error") else []) + [
+                warning for warning in (graph_view.get("warnings") or [])
+            ]
+            graph_data = json.dumps({
+                "nodes": graph_view["nodes"],
+                "edges": graph_view["edges"],
+                "warnings": graph_warnings,
+                "counts": graph_view.get("counts") or {},
+            }).replace("</", "<\\/")
         return templates.TemplateResponse(
             request,
             "project_detail.html",
@@ -612,6 +628,14 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
                 docs_error=request.query_params.get("docs_error"),
                 docs_message=request.query_params.get("docs_message"),
                 stop_ready=stop_ready,
+                view=view,
+                graph_data=graph_data,
+                graph_warnings=graph_warnings,
+                workspace_manifest=manifest_workspace(docs.get("manifest") or {}),
+                principle_rules={
+                    principle["key"]: parse_rules(principle.get("content") or "")
+                    for principle in manifest["principles"]
+                },
             ),
             status_code=status_code,
         )
@@ -749,6 +773,82 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             )
         return {"ok": True, "message": message, "repository": registry.repository_status(project_id)}
 
+    @app.post("/api/projects/{project_id}/repository/key/replace")
+    async def repository_key_replace(project_id: str):
+        """Stage a replacement key pair. The active key keeps working until activation."""
+        try:
+            registry.generate_replacement_deploy_key(project_id)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        return {"ok": True, "repository": registry.repository_status(project_id)}
+
+    @app.post("/api/projects/{project_id}/repository/key/activate")
+    async def repository_key_activate(project_id: str):
+        """Verify the staged replacement against the remote, then switch the active key."""
+        try:
+            ok, message = registry.activate_replacement_deploy_key(project_id)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        status = registry.repository_status(project_id)
+        if not ok:
+            return JSONResponse(
+                {"error": message, "repository": status},
+                status_code=422,
+            )
+        return {"ok": True, "message": message, "repository": status}
+
+    @app.post("/api/projects/{project_id}/repository/key/discard")
+    async def repository_key_discard(project_id: str):
+        """Drop the staged replacement; the current key stays active."""
+        try:
+            registry.discard_replacement_deploy_key(project_id)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        return {"ok": True, "repository": registry.repository_status(project_id)}
+
+    @app.delete("/api/projects/{project_id}/repository/key")
+    async def repository_key_remove(project_id: str):
+        """Remove the repository credentials. The project and its data stay."""
+        try:
+            message = registry.remove_deploy_key(project_id)
+        except ProjectError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        return {"ok": True, "message": message, "repository": registry.repository_status(project_id)}
+
+    @app.post("/projects/{project_id}/repository/key/replace")
+    async def repository_key_replace_form(request: Request, project_id: str):
+        try:
+            registry.generate_replacement_deploy_key(project_id)
+        except ProjectError as exc:
+            return _render_project(request, project_id, error=str(exc), status_code=422)
+        return RedirectResponse(f"/projects/{project_id}?view=principles#repository", status_code=303)
+
+    @app.post("/projects/{project_id}/repository/key/activate")
+    async def repository_key_activate_form(request: Request, project_id: str):
+        try:
+            ok, message = registry.activate_replacement_deploy_key(project_id)
+        except ProjectError as exc:
+            return _render_project(request, project_id, error=str(exc), status_code=422)
+        if not ok:
+            return _render_project(request, project_id, error=message, status_code=422)
+        return RedirectResponse(f"/projects/{project_id}#repository", status_code=303)
+
+    @app.post("/projects/{project_id}/repository/key/discard")
+    async def repository_key_discard_form(request: Request, project_id: str):
+        try:
+            registry.discard_replacement_deploy_key(project_id)
+        except ProjectError as exc:
+            return _render_project(request, project_id, error=str(exc), status_code=422)
+        return RedirectResponse(f"/projects/{project_id}#repository", status_code=303)
+
+    @app.post("/projects/{project_id}/repository/remove")
+    async def repository_key_remove_form(request: Request, project_id: str):
+        try:
+            registry.remove_deploy_key(project_id)
+        except ProjectError as exc:
+            return _render_project(request, project_id, error=str(exc), status_code=422)
+        return RedirectResponse(f"/projects/{project_id}#repository", status_code=303)
+
     # --- Principles (AGENTS.md 12.4 / 12.8) ----------------------------------------
 
     @app.get("/api/projects/{project_id}/principles")
@@ -876,26 +976,35 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
         except ProjectError as exc:
             return JSONResponse({"error": str(exc)}, status_code=404)
 
+    def _docs_redirect(project_id: str, view: str, message_name: str, message: str) -> str:
+        base = f"/projects/{project_id}"
+        if view in ("principles", "manifest", "decisions", "graph"):
+            separator = "&"
+            base += f"?view={view}"
+        else:
+            separator = "?"
+        return f"{base}{separator}{message_name}={quote(message)}#docs"
+
     @app.post("/projects/{project_id}/docs/sync")
-    async def project_docs_sync_form(request: Request, project_id: str):
+    async def project_docs_sync_form(request: Request, project_id: str, view: str = Form("")):
         try:
             project_docs.sync(project_id)
         except (ProjectDocsError, ProjectError) as exc:
             return RedirectResponse(
-                f"/projects/{project_id}?docs_error={quote(str(exc))}#docs", status_code=303
+                _docs_redirect(project_id, view, "docs_error", str(exc)), status_code=303
             )
         message = "Project docs synced from the repository."
         return RedirectResponse(
-            f"/projects/{project_id}?docs_message={quote(message)}#docs", status_code=303
+            _docs_redirect(project_id, view, "docs_message", message), status_code=303
         )
 
     @app.post("/projects/{project_id}/docs/init")
-    async def project_docs_init_form(request: Request, project_id: str):
+    async def project_docs_init_form(request: Request, project_id: str, view: str = Form("")):
         try:
             result = project_docs.ensure_scaffold(project_id)
         except (ProjectDocsError, ProjectError) as exc:
             return RedirectResponse(
-                f"/projects/{project_id}?docs_error={quote(str(exc))}#docs", status_code=303
+                _docs_redirect(project_id, view, "docs_error", str(exc)), status_code=303
             )
         message = (
             "Created the missing project docs in the repository."
@@ -903,7 +1012,7 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             else "Project docs already exist; nothing was written."
         )
         return RedirectResponse(
-            f"/projects/{project_id}?docs_message={quote(message)}#docs", status_code=303
+            _docs_redirect(project_id, view, "docs_message", message), status_code=303
         )
 
     @app.post("/projects/{project_id}/decisions")
@@ -914,6 +1023,7 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
         decision: str = Form(""),
         reason: str = Form(""),
         alternatives: str = Form(""),
+        view: str = Form(""),
     ):
         try:
             result = project_docs.append_decision(
@@ -921,11 +1031,11 @@ def create_app(registry: ProjectRegistry | None = None, requests: RequestStore |
             )
         except (ProjectDocsError, ProjectError) as exc:
             return RedirectResponse(
-                f"/projects/{project_id}?docs_error={quote(str(exc))}#docs", status_code=303
+                _docs_redirect(project_id, view, "docs_error", str(exc)), status_code=303
             )
         message = f"Added {result['written']}."
         return RedirectResponse(
-            f"/projects/{project_id}?docs_message={quote(message)}#docs", status_code=303
+            _docs_redirect(project_id, view, "docs_message", message), status_code=303
         )
 
     # --- Environments (AGENTS.md 12.5 / 12.8) ---------------------------------------

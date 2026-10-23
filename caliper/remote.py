@@ -16,6 +16,14 @@ class RemoteError(Exception):
     pass
 
 
+class ReadCheckError(RemoteError):
+    """The key could not read the repository (git ls-remote failed)."""
+
+
+class WriteCheckError(RemoteError):
+    """The key can read, but a push dry-run failed: the key has no write access."""
+
+
 def _run(command: list[str], cwd: Path | None = None, env: dict | None = None, timeout: float = 45,
          input_text: str | None = None, max_output: int = 1200) -> tuple[int, str]:
     try:
@@ -112,7 +120,7 @@ def test_repository(repo_url: str, key_path: Path) -> str:
     env = _git_env(key_path)
     code, output = _run(["git", "ls-remote", url], env=env)
     if code != 0:
-        raise RemoteError(f"Read check failed: {output or 'git ls-remote failed'}")
+        raise ReadCheckError(f"Read check failed: {output or 'git ls-remote failed'}")
     with tempfile.TemporaryDirectory(prefix="caliper-access-") as temp:
         work = Path(temp)
         for command in (
@@ -128,7 +136,7 @@ def test_repository(repo_url: str, key_path: Path) -> str:
             env=env,
         )
     if code != 0:
-        raise RemoteError(f"Write check failed: {output or 'git push --dry-run failed'}")
+        raise WriteCheckError(f"Write check failed: {output or 'git push --dry-run failed'}")
     return "Read and write access verified."
 
 

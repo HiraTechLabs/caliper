@@ -18,7 +18,9 @@ from caliper.principles import (
     principle_path,
 )
 from caliper.remote import (
+    ReadCheckError,
     RemoteError,
+    WriteCheckError,
     generate_ed25519_key,
     repo_keys_url,
     ssh_copy_id_command,
@@ -139,6 +141,13 @@ class ProjectRegistry:
         repo.setdefault("test_message", "")
         repo.setdefault("key_created_at", None)
         repo.setdefault("default_branch", None)
+        # Deploy-key lifecycle fields (D-070). Older manifests get sane defaults.
+        repo.setdefault("access", None)
+        repo.setdefault("replacement_created_at", None)
+        repo.setdefault("replacement_verified", False)
+        repo.setdefault("replacement_message", "")
+        repo.setdefault("rotated_at", None)
+        repo.setdefault("remote_revocation_pending", False)
         legacy = manifest.pop("principles_status", None) or {}
         principles = manifest.setdefault("principles", {})
         for key in PRINCIPLE_ORDER:
@@ -177,6 +186,10 @@ class ProjectRegistry:
         repo = manifest.get("repo") or {}
         repo["keys_url"] = repo_keys_url(repo.get("url") or "")
         repo["public_key"] = self.public_deploy_key(project_id)
+        staged = self.replacement_deploy_key_exists(project_id)
+        repo["replacement_public_key"] = (
+            self.replacement_deploy_key(project_id) if staged else ""
+        )
         manifest["environment_keys"] = {
             env: self.public_environment_key(project_id, env) for env in ENVIRONMENT_ORDER
         }
@@ -473,9 +486,17 @@ class ProjectRegistry:
         public_path = self.public_deploy_key_path(project_id)
         if public_key:
             self._write_public(public_path, public_key)
+        staged = self.replacement_deploy_key_exists(project_id)
+        replacement = None
+        if staged:
+            replacement = {
+                "created_at": repo.get("replacement_created_at"),
+                "verified": bool(repo.get("replacement_verified")),
+                "message": repo.get("replacement_message"),
+                "public_key": self.replacement_deploy_key(project_id),
+            }
         return {
             "url": repo.get("url"),
-            "mode": repo.get("mode"),
             "public_key": public_key,
             "key_path": str(public_path),
             "key_exists": self.deploy_key_exists(project_id),
@@ -487,6 +508,11 @@ class ProjectRegistry:
             "test_message": repo.get("test_message"),
             "key_created_at": repo.get("key_created_at"),
             "default_branch": repo.get("default_branch"),
+            "access": repo.get("access"),
+            "required_access": "write",
+            "rotated_at": repo.get("rotated_at"),
+            "remote_revocation_pending": bool(repo.get("remote_revocation_pending")),
+            "replacement": replacement,
         }
 
     def test_repository_access(self, project_id: str) -> tuple[bool, str]:
@@ -501,14 +527,171 @@ class ProjectRegistry:
             repo["verified"] = True
             repo["test_message"] = message
             repo["verified_at"] = _now()
+            repo["access"] = "write"
             self._write_manifest(project_id, manifest)
             return True, message
-        except (RemoteError, ProjectError, SecretStoreError) as exc:
+        except ReadCheckError as exc:
             repo["verified"] = False
             repo["verified_at"] = None
+            repo["access"] = None
             repo["test_message"] = str(exc)
             self._write_manifest(project_id, manifest)
             return False, str(exc)
+        except WriteCheckError as exc:
+            # The key reads, but the host refused a push: it is a read-only key.
+            repo["verified"] = False
+            repo["verified_at"] = None
+            repo["access"] = "read"
+            repo["test_message"] = str(exc)
+            self._write_manifest(project_id, manifest)
+            return False, str(exc)
+        except (RemoteError, ProjectError, SecretStoreError) as exc:
+            repo["verified"] = False
+            repo["verified_at"] = None
+            repo["access"] = None
+            repo["test_message"] = str(exc)
+            self._write_manifest(project_id, manifest)
+            return False, str(exc)
+
+    # --- deploy key replacement and removal (D-070) ------------------------------
+
+    REPLACEMENT_PRIVATE = "deploy_key_replacement"
+    REPLACEMENT_PUBLIC = "deploy_key_replacement.pub"
+
+    def replacement_deploy_key_exists(self, project_id: str) -> bool:
+        try:
+            return self.secret_store.exists(
+                self.deploy_scope(project_id), self.REPLACEMENT_PRIVATE
+            )
+        except SecretStoreError:
+            return False
+
+    def replacement_deploy_key_context(self, project_id: str):
+        return self._key_context(self.deploy_scope(project_id), self.REPLACEMENT_PRIVATE)
+
+    def replacement_deploy_key(self, project_id: str) -> str:
+        try:
+            return self.secret_store.get(
+                self.deploy_scope(project_id), self.REPLACEMENT_PUBLIC
+            ).strip()
+        except (SecretNotFound, SecretStoreError):
+            return ""
+
+    def generate_replacement_deploy_key(self, project_id: str) -> str:
+        """Stage a replacement pair. The active key keeps working until activation."""
+        manifest = self._read_manifest(project_id)
+        if not (manifest["repo"].get("url") or "").strip():
+            raise ProjectError("Add a repository URL first.")
+        try:
+            public = self._generate_pair(
+                self.deploy_scope(project_id),
+                self.REPLACEMENT_PRIVATE,
+                self.REPLACEMENT_PUBLIC,
+                f"caliper-{project_id}-replacement",
+            )
+        except (RemoteError, SecretStoreError) as exc:
+            raise ProjectError(str(exc))
+        repo = manifest["repo"]
+        repo["replacement_created_at"] = _now()
+        repo["replacement_verified"] = False
+        repo["replacement_message"] = (
+            "Replacement generated. Add its public key to the repository, "
+            "then test and activate it. The current key keeps working."
+        )
+        self._write_manifest(project_id, manifest)
+        return public
+
+    def activate_replacement_deploy_key(self, project_id: str) -> tuple[bool, str]:
+        """Verify the staged replacement, then make it the active key on success.
+
+        On any failure the previous active key is untouched.
+        """
+        manifest = self._read_manifest(project_id)
+        repo = manifest["repo"]
+        if not repo.get("url"):
+            raise ProjectError("Add a repository URL first.")
+        if not self.replacement_deploy_key_exists(project_id):
+            raise ProjectError("No replacement key is staged. Generate one first.")
+        try:
+            with self.replacement_deploy_key_context(project_id) as key_path:
+                message = self._repo_tester(repo["url"], key_path)
+        except (RemoteError, ProjectError, SecretStoreError) as exc:
+            repo["replacement_verified"] = False
+            repo["replacement_message"] = (
+                f"The replacement did not verify, so the current key is still active: {exc}"
+            )
+            self._write_manifest(project_id, manifest)
+            return False, repo["replacement_message"]
+        private = self.secret_store.get(self.deploy_scope(project_id), self.REPLACEMENT_PRIVATE)
+        public = self.secret_store.get(self.deploy_scope(project_id), self.REPLACEMENT_PUBLIC)
+        # The active material is overwritten only after the replacement verified.
+        self.secret_store.put(self.deploy_scope(project_id), "deploy_key", private)
+        self.secret_store.put(self.deploy_scope(project_id), "deploy_key.pub", public)
+        self.secret_store.delete(self.deploy_scope(project_id), self.REPLACEMENT_PRIVATE)
+        self.secret_store.delete(self.deploy_scope(project_id), self.REPLACEMENT_PUBLIC)
+        self._write_public(self.public_deploy_key_path(project_id), public.strip())
+        repo["verified"] = True
+        repo["verified_at"] = _now()
+        repo["test_message"] = "Replacement key activated. " + message
+        repo["access"] = "write"
+        repo["key_created_at"] = _now()
+        repo["rotated_at"] = _now()
+        repo["remote_revocation_pending"] = True
+        repo["replacement_created_at"] = None
+        repo["replacement_verified"] = False
+        repo["replacement_message"] = ""
+        self._write_manifest(project_id, manifest)
+        return True, repo["test_message"]
+
+    def discard_replacement_deploy_key(self, project_id: str) -> bool:
+        """Drop the staged replacement; the active key is untouched."""
+        manifest = self._read_manifest(project_id)
+        removed = False
+        for name in (self.REPLACEMENT_PRIVATE, self.REPLACEMENT_PUBLIC):
+            try:
+                removed = self.secret_store.delete(
+                    self.deploy_scope(project_id), name
+                ) or removed
+            except SecretStoreError as exc:
+                raise ProjectError(str(exc))
+        repo = manifest["repo"]
+        if repo.get("replacement_created_at"):
+            removed = True
+        repo["replacement_created_at"] = None
+        repo["replacement_verified"] = False
+        repo["replacement_message"] = ""
+        self._write_manifest(project_id, manifest)
+        return removed
+
+    def remove_deploy_key(self, project_id: str) -> str:
+        """Remove the repository credentials. The project and its data stay."""
+        manifest = self._read_manifest(project_id)
+        for name in (
+            "deploy_key", "deploy_key.pub",
+            self.REPLACEMENT_PRIVATE, self.REPLACEMENT_PUBLIC,
+        ):
+            try:
+                self.secret_store.delete(self.deploy_scope(project_id), name)
+            except SecretStoreError as exc:
+                raise ProjectError(str(exc))
+        public_path = self.public_deploy_key_path(project_id)
+        if public_path.is_file():
+            public_path.unlink()
+        repo = manifest["repo"]
+        repo["verified"] = False
+        repo["verified_at"] = None
+        repo["test_message"] = (
+            "Deploy key removed. Generate a new key, add it to the repository, "
+            "then test read/write access."
+        )
+        repo["access"] = None
+        repo["key_created_at"] = None
+        repo["remote_revocation_pending"] = False
+        repo["replacement_created_at"] = None
+        repo["replacement_verified"] = False
+        repo["replacement_message"] = ""
+        self._write_manifest(project_id, manifest)
+        return "Repository credentials removed. The project and its data are untouched."
 
     def test_environment_access(self, project_id: str, env: str) -> tuple[bool, str]:
         if env not in ENVIRONMENT_ORDER:

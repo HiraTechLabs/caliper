@@ -27,8 +27,7 @@
   <a href="#requests">Requests</a>
   <a href="#repository">Repository</a>
   <a href="#environments">Environments</a>
-  <a href="#principles">Principles</a>
-  <a href="#docs">Docs</a>
+  <a href="#workspace">Workspace</a>
   <a href="#settings">Settings</a>
 </nav>
 
@@ -37,7 +36,7 @@
   <p class="muted">Requests stay disabled until all four items are ready.</p>
   <div class="setup-checklist">
     {% for item in setup %}
-    {% set anchor = '#repository' if item.key == 'repository' else ('#principles' if item.key == 'principles' else '#environment-' ~ item.key) %}
+    {% set anchor = '#repository' if item.key == 'repository' else ('#workspace' if item.key == 'principles' else '#environment-' ~ item.key) %}
     <a class="card setup-item {{ 'ready' if item.ready else 'missing' }}" href="{{ anchor }}">
       <span class="setup-item-icon">{{ '&#10003;'|safe if item.ready else '&#10005;'|safe }}</span>
       <span class="setup-item-copy">
@@ -78,29 +77,82 @@
 <section class="detail-section" id="repository">
   <div class="section-head">
     <h2>Repository access</h2>
-    <span class="status-badge tone-{{ 'merged' if project.repo.verified else 'awaiting' }}">
-      <span class="status-badge-inner"><span class="label">{{ "Verified" if project.repo.verified else "Not verified" }}</span></span>
-    </span>
+    {% if project.repo.verified %}
+    <span class="status-badge tone-merged"><span class="status-badge-inner"><span class="label">Connected &middot; read + write</span></span></span>
+    {% elif project.repo.access == 'read' %}
+    <span class="status-badge tone-awaiting"><span class="status-badge-inner"><span class="label">Read-only &middot; write missing</span></span></span>
+    {% else %}
+    <span class="status-badge tone-neutral"><span class="status-badge-inner"><span class="label">Not connected</span></span></span>
+    {% endif %}
   </div>
   <div class="card setup-card">
+    <p class="muted">
+      Repository: <span class="mono">{{ project.repo.url or "not set" }}</span>
+      {% if project.repo.default_branch %} &middot; default branch <span class="mono">{{ project.repo.default_branch }}</span>{% endif %}
+    </p>
     <p class="muted">Caliper uses a project-specific SSH deploy key. Add the public key to the repository with write access, then test.</p>
     {% if project.repo.public_key %}
     <label class="field">
-      <span>Public deploy key</span>
-      <textarea class="key-text" rows="3" readonly onclick="this.select()">{{ project.repo.public_key }}</textarea>
-      <span class="helper">{% if project.repo.keys_url %}<a href="{{ project.repo.keys_url }}" target="_blank" rel="noopener">Open the repository deploy keys page</a>. {% endif %}The private key stays under CALIPER_SECRETS_DIR.</span>
+      <span>Active public deploy key</span>
+      <textarea id="deploy-public-key" class="key-text" rows="3" readonly onclick="this.select()">{{ project.repo.public_key }}</textarea>
+      <span class="helper">
+        <button class="btn ghost" type="button" data-copy-key="deploy-public-key">Copy</button>
+        {% if project.repo.keys_url %}<a href="{{ project.repo.keys_url }}" target="_blank" rel="noopener">Open the repository deploy keys page</a>.{% endif %}
+        The private key stays encrypted in Caliper's secret store and is never shown.
+      </span>
     </label>
+    <p class="helper">Caliper needs write access on this key: it commits principles, decisions, graph and request changes to the default branch.</p>
     {% else %}
     <p class="setup-note">No deploy key yet.</p>
     {% endif %}
     <div class="form-actions inline-actions">
       {% if not project.repo.public_key %}
       <form method="post" action="/projects/{{ project.id }}/repository/key"><button class="btn secondary" type="submit">Generate deploy key</button></form>
-      {% endif %}
-      {% if project.repo.public_key and project.repo.url %}
+      {% elif project.repo.url %}
+      {% if project.repo.replacement_public_key %}
+      <form method="post" action="/projects/{{ project.id }}/repository/key/activate"><button class="btn primary" type="submit">Test replacement and activate</button></form>
+      <form method="post" action="/projects/{{ project.id }}/repository/key/discard"><button class="btn ghost" type="submit">Discard replacement</button></form>
+      {% else %}
       <form method="post" action="/projects/{{ project.id }}/repository/test"><button class="btn primary" type="submit">Test read/write access</button></form>
+      <form method="post" action="/projects/{{ project.id }}/repository/key/replace"><button class="btn secondary" type="submit">Replace deploy key</button></form>
+      {% endif %}
       {% endif %}
     </div>
+    {% if project.repo.replacement_public_key %}
+    <div class="replacement-box">
+      <label class="field">
+        <span>Replacement key (not active yet)</span>
+        <textarea id="deploy-replacement-key" class="key-text" rows="3" readonly onclick="this.select()">{{ project.repo.replacement_public_key }}</textarea>
+        <span class="helper">
+          <button class="btn ghost" type="button" data-copy-key="deploy-replacement-key">Copy</button>
+          Add this public key to the repository deploy keys page first. The active key keeps
+          working until the replacement verifies.
+        </span>
+      </label>
+    </div>
+    {% endif %}
+    {% if project.repo.remote_revocation_pending %}
+    <div class="setup-note bad" role="status">
+      Rotation pending on GitHub: the replaced key must still be removed from the
+      repository's deploy keys page. Caliper cannot revoke it &mdash; removing the
+      stale key there is a manual step.
+    </div>
+    {% endif %}
+    {% if project.repo.public_key %}
+    <details class="confirm-dialog">
+      <summary class="btn danger">Remove repository access</summary>
+      <div class="card confirm-body">
+        <p>Removes Caliper's deploy key for this project. The project, its requests and its
+        <span class="mono">.caliper/</span> knowledge in the repository stay untouched. Caliper stops
+        syncing principles, decisions and graph until a new key is added and verified.</p>
+        <p class="helper">Removable manually, also on the GitHub deploy keys page: keeping the key there after removing it locally leaves an unused credential.</p>
+        <form method="post" action="/projects/{{ project.id }}/repository/remove">
+          <button class="btn danger" type="submit">Yes, remove the credentials</button>
+          <a class="btn ghost" href="/projects/{{ project.id }}#repository">Cancel</a>
+        </form>
+      </div>
+    </details>
+    {% endif %}
     {% if project.repo.test_message %}
     <div class="setup-note {{ 'ok' if project.repo.verified else 'bad' }}" role="status">{{ project.repo.test_message }}</div>
     {% endif %}
@@ -129,8 +181,8 @@
         {% if project.environment_keys[env] %}
         <label class="field">
           <span>Public SSH key</span>
-          <textarea class="key-text" rows="3" readonly onclick="this.select()">{{ project.environment_keys[env] }}</textarea>
-          <span class="helper">Add this line to the server user's <span class="mono">authorized_keys</span>.</span>
+          <textarea id="env-{{ env }}-key" class="key-text" rows="3" readonly onclick="this.select()">{{ project.environment_keys[env] }}</textarea>
+          <span class="helper"><button class="btn ghost" type="button" data-copy-key="env-{{ env }}-key">Copy</button> Add this line to the server user's <span class="mono">authorized_keys</span>.</span>
         </label>
         {% endif %}
         <div class="form-actions inline-actions">
@@ -147,39 +199,19 @@
   </div>
 </section>
 
-<section class="detail-section" id="principles">
-  <h2>Principles</h2>
-  <p class="muted">Six principle files, numbered and checkable. Plans cite these rule IDs; reviews judge against them. Approve all six to unlock requests.</p>
-  <div class="principles-grid">
-    {% for principle in project.principles %}
-    <div class="card principle-card">
-      <div class="section-head">
-        <h3>{{ principle.title }}</h3>
-        <span class="status-badge tone-{{ 'merged' if principle.status == 'approved' else 'neutral' }}">
-          <span class="status-badge-inner"><span class="label">{{ "Approved" if principle.status == 'approved' else ("Missing" if principle.status == 'missing' else "Draft") }}</span></span>
-        </span>
-      </div>
-      <pre class="principle-content">{{ principle.content or "No file in the repository yet." }}</pre>
-      <form method="post" action="/projects/{{ project.id }}/principles/{{ principle.key }}">
-        {% if principle.status == 'approved' %}
-        <button class="btn secondary" type="submit" name="action" value="revoke">Revoke approval</button>
-        {% else %}
-        <button class="btn primary" type="submit" name="action" value="approve">Approve</button>
-        {% endif %}
-      </form>
-    </div>
-    {% endfor %}
-  </div>
-</section>
-
-<section class="detail-section" id="docs">
+<section class="detail-section" id="workspace">
+  <span id="principles"></span><span id="docs"></span>
   <div class="section-head">
-    <h2>Project docs</h2>
+    <h2>Knowledge workspace</h2>
     <span class="status-badge tone-{{ 'merged' if docs.synced else 'neutral' }}">
       <span class="status-badge-inner"><span class="label">{{ "Synced" if docs.synced else "Cached" }}</span></span>
     </span>
   </div>
-  <p class="muted">Read from <span class="mono">.caliper/manifest.yaml</span>, <span class="mono">.caliper/graph.yaml</span> and <span class="mono">.caliper/decisions/</span> on the default branch.</p>
+  <p class="muted">
+    Read from <span class="mono">.caliper/manifest.yaml</span>, <span class="mono">.caliper/graph.yaml</span>,
+    <span class="mono">.caliper/principles/</span> and <span class="mono">.caliper/decisions/</span>
+    on <span class="mono">{{ docs.branch or "the default branch" }}</span>. The repository files are the source of truth.
+  </p>
 
   {% if docs_message %}
   <div class="alert" role="status">{{ docs_message }}</div>
@@ -196,68 +228,206 @@
 
   <div class="form-actions inline-actions">
     <form method="post" action="/projects/{{ project.id }}/docs/sync">
+      <input type="hidden" name="view" value="{{ view }}">
       <button class="btn secondary" type="submit">Sync from repository</button>
     </form>
     {% if docs.missing %}
     <form method="post" action="/projects/{{ project.id }}/docs/init">
+      <input type="hidden" name="view" value="{{ view }}">
       <button class="btn primary" type="submit">Create missing docs</button>
     </form>
     {% endif %}
   </div>
 
+  <nav class="workspace-tabs" aria-label="Workspace views">
+    <a class="{{ 'active' if view == 'principles' }}" href="/projects/{{ project.id }}?view=principles#workspace">Principles</a>
+    <a class="{{ 'active' if view == 'manifest' }}" href="/projects/{{ project.id }}?view=manifest#workspace">Manifest</a>
+    <a class="{{ 'active' if view == 'decisions' }}" href="/projects/{{ project.id }}?view=decisions#workspace">Decisions</a>
+    <a class="{{ 'active' if view == 'graph' }}" href="/projects/{{ project.id }}?view=graph#workspace">Graph</a>
+  </nav>
+
+  {% if view == 'principles' %}
+  <p class="muted">Six principle files, numbered and checkable. Plans cite these rule IDs; reviews judge against them. Approve all six to unlock requests.</p>
   <div class="principles-grid">
-    <div class="card">
-      <h3>Manifest</h3>
-      <pre class="principle-content">{{ docs.manifest_text or "No .caliper/manifest.yaml yet." }}</pre>
-    </div>
-    <div class="card">
-      <h3>Graph</h3>
-      {% if docs.graph %}
-      <p class="helper">{{ docs.graph.nodes|length }} nodes, {{ docs.graph.edges|length }} edges.</p>
+    {% for principle in project.principles %}
+    {% set record = project.principles_records[principle.key] %}
+    <div class="card principle-card">
+      <div class="section-head">
+        <h3>{{ principle.title }}</h3>
+        <span class="status-badge tone-{{ 'merged' if principle.status == 'approved' else 'neutral' }}">
+          <span class="status-badge-inner"><span class="label">{{ "Approved" if principle.status == 'approved' else ("Missing" if principle.status == 'missing' else "Draft") }}</span></span>
+        </span>
+      </div>
+      {% if principle_rules[principle.key] %}
+      <ul class="rule-chips" aria-label="Rule IDs">
+        {% for rule in principle_rules[principle.key] %}
+        <li><span class="mono">{{ rule.id }}</span>{% if rule.text %} {{ rule.text }}{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% elif principle.status == 'missing' %}
+      <p class="muted">No file in the repository yet.</p>
       {% endif %}
-      {% if docs.graph_error %}
-      <div class="alert danger" role="alert">{{ docs.graph_error }}</div>
+      {% if record.approved_at %}
+      <p class="helper">Approved {{ record.approved_at }} at <span class="mono">{{ (record.approved_commit or "")[:12] or "unknown commit" }}</span></p>
       {% endif %}
-      <pre class="principle-content">{{ docs.graph_text or "No .caliper/graph.yaml yet." }}</pre>
+      {% if principle.content %}
+      <details>
+        <summary class="muted">Source file (.caliper/principles/{{ principle.key }}.md)</summary>
+        <pre class="principle-content">{{ principle.content }}</pre>
+      </details>
+      {% endif %}
+      <form method="post" action="/projects/{{ project.id }}/principles/{{ principle.key }}">
+        {% if principle.status == 'approved' %}
+        <button class="btn secondary" type="submit" name="action" value="revoke">Revoke approval</button>
+        {% else %}
+        <button class="btn primary" type="submit" name="action" value="approve">Approve</button>
+        {% endif %}
+      </form>
     </div>
+    {% endfor %}
+  </div>
+  {% elif view == 'manifest' %}
+  {% if docs.manifest %}
+  <div class="manifest-sections">
+    {% for section, rows in [("Project", workspace_manifest.project), ("Repository", workspace_manifest.repository), ("Other fields", workspace_manifest.other)] %}
+    {% if rows %}
     <div class="card">
-      <h3>Decisions</h3>
-      {% if docs.decisions %}
-      {% for decision in docs.decisions %}
-      <details class="decision-item">
-        <summary><span class="mono">{{ decision.name }}</span> {{ decision.title }}</summary>
+      <h3>{{ section }}</h3>
+      <table class="manifest-table">
+        <tbody>
+        {% for key, value in rows %}
+        <tr><th scope="row"><span class="mono">{{ key }}</span></th><td><span class="mono">{{ value }}</span></td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+  <details class="raw-file">
+    <summary class="muted">Raw file (.caliper/manifest.yaml)</summary>
+    <p class="helper">Secret-looking values are redacted in this view. The original file lives in the repository.</p>
+    <pre class="principle-content">{{ docs.manifest_text_redacted or docs.manifest_text }}</pre>
+  </details>
+  {% else %}
+  <div class="empty-state card">
+    <div class="empty-icon">&#128193;</div>
+    <p>No <span class="mono">.caliper/manifest.yaml</span> in the repository yet. Sync from the repository and create the missing docs.</p>
+  </div>
+  {% endif %}
+  {% elif view == 'decisions' %}
+  {% if docs.decisions %}
+  <p class="muted">{{ docs.decisions|length }} decision{{ "s" if docs.decisions|length != 1 }}, newest first. Decision files are append-only in the repository.</p>
+  <ol class="decision-list">
+    {% for decision in docs.decisions|reverse %}
+    <li class="card decision-card">
+      <div class="decision-head">
+        <span class="decision-order mono">{{ loop.revindex }}</span>
+        <div class="decision-copy">
+          <strong>{{ decision.title }}</strong>
+          {% if decision.fields.date %}<span class="helper">{{ decision.fields.date }}</span>{% endif %}
+        </div>
+      </div>
+      {% if decision.fields.decision %}
+      <p class="decision-line">{{ decision.fields.decision }}</p>
+      {% endif %}
+      {% if decision.fields.reason %}
+      <p class="helper">Reason: {{ decision.fields.reason }}</p>
+      {% endif %}
+      {% if decision.fields.alternatives %}
+      <p class="helper">Alternatives rejected: {{ decision.fields.alternatives }}</p>
+      {% endif %}
+      <details>
+        <summary class="muted">File {{ decision.name }}</summary>
         <pre class="principle-content">{{ decision.content }}</pre>
       </details>
-      {% endfor %}
-      {% else %}
-      <p class="muted">No decisions yet. Append one Markdown file under <span class="mono">.caliper/decisions/</span>.</p>
-      {% endif %}
-      <details class="decision-item">
-        <summary>Add decision</summary>
-        <form method="post" action="/projects/{{ project.id }}/decisions" class="form">
-          <label class="field">
-            <span>Title</span>
-            <input type="text" name="title" required autocomplete="off">
-          </label>
-          <label class="field">
-            <span>Decision</span>
-            <textarea name="decision" rows="3" required></textarea>
-          </label>
-          <label class="field">
-            <span>Reason</span>
-            <textarea name="reason" rows="3" required></textarea>
-          </label>
-          <label class="field">
-            <span>Alternatives rejected <span class="helper">(optional)</span></span>
-            <textarea name="alternatives" rows="2"></textarea>
-          </label>
-          <div class="form-actions">
-            <button class="btn secondary" type="submit">Add decision</button>
-          </div>
-        </form>
-      </details>
-    </div>
+    </li>
+    {% endfor %}
+  </ol>
+  <details class="decision-item">
+    <summary>Add decision</summary>
+    <form method="post" action="/projects/{{ project.id }}/decisions" class="form">
+      <input type="hidden" name="view" value="decisions">
+      <label class="field">
+        <span>Title</span>
+        <input type="text" name="title" required autocomplete="off">
+      </label>
+      <label class="field">
+        <span>Decision</span>
+        <textarea name="decision" rows="3" required></textarea>
+      </label>
+      <label class="field">
+        <span>Reason</span>
+        <textarea name="reason" rows="3" required></textarea>
+      </label>
+      <label class="field">
+        <span>Alternatives rejected <span class="helper">(optional)</span></span>
+        <textarea name="alternatives" rows="2"></textarea>
+      </label>
+      <div class="form-actions">
+        <button class="btn secondary" type="submit">Add decision</button>
+      </div>
+    </form>
+  </details>
+  {% else %}
+  <div class="empty-state card">
+    <div class="empty-icon">&#128220;</div>
+    <p>No decisions recorded yet. Append one Markdown file under <span class="mono">.caliper/decisions/</span>.</p>
   </div>
+  {% endif %}
+  {% elif view == 'graph' %}
+  {% if docs.graph is none %}
+  <div class="empty-state card">
+    <div class="empty-icon">&#128279;</div>
+    <p>No <span class="mono">.caliper/graph.yaml</span> yet. Create the missing docs, then add nodes and edges in the repository.</p>
+  </div>
+  {% elif not graph_data or not (docs.graph_view.nodes | length) %}
+  <div class="empty-state card">
+    <div class="empty-icon">&#128279;</div>
+    {% if docs.graph_error %}
+    <p class="danger-text">{{ docs.graph_error }}</p>
+    <p class="muted">Fix <span class="mono">.caliper/graph.yaml</span> in the repository, then sync.</p>
+    {% else %}
+    <p>The graph has no drawable nodes yet. Add <span class="mono">nodes:</span> entries to <span class="mono">.caliper/graph.yaml</span> in the repository.</p>
+    {% endif %}
+  </div>
+  {% else %}
+  {% if graph_warnings %}
+  <div class="setup-note bad" role="status">{{ graph_warnings | join(" ") }}</div>
+  {% endif %}
+  <p class="helper">{{ docs.graph_view.counts.nodes }} nodes, {{ docs.graph_view.counts.edges }} edges. Drag to pan, scroll to zoom, click a node for its details.</p>
+  <div class="graph-wrap" data-graph-root>
+    <script id="caliper-graph-data" type="application/json">{{ graph_data | safe }}</script>
+    <div class="graph-toolbar">
+      <div class="graph-zoom" role="group" aria-label="Zoom controls">
+        <button class="btn ghost" type="button" data-graph-zoom="out" aria-label="Zoom out">&minus;</button>
+        <button class="btn ghost" type="button" data-graph-zoom="in" aria-label="Zoom in">+</button>
+        <button class="btn ghost" type="button" data-graph-zoom="reset">Reset</button>
+      </div>
+      <div class="graph-filters" data-graph-filters aria-label="Filter nodes by type"></div>
+    </div>
+    <div class="graph-canvas" data-graph-canvas tabindex="0" role="application" aria-label="Project graph; arrow keys pan">
+      <svg data-graph-svg viewBox="0 0 900 560" role="presentation"></svg>
+    </div>
+    <aside class="card graph-details" data-graph-details hidden>
+      <button class="icon-btn" type="button" data-graph-close aria-label="Close details">&times;</button>
+      <h3 data-graph-title></h3>
+      <p class="helper mono" data-graph-id></p>
+      <dl class="graph-meta">
+        <div><dt>Type</dt><dd data-graph-kind></dd></div>
+        <div><dt>Component path</dt><dd data-graph-path data-empty="not recorded"></dd></div>
+        <div><dt>Description</dt><dd data-graph-description data-empty="none"></dd></div>
+      </dl>
+      <div class="graph-relations" data-graph-relations></div>
+      <p class="graph-note helper" data-graph-note hidden>No edges reference this node yet.</p>
+    </aside>
+  </div>
+  <details class="raw-file">
+    <summary class="muted">Raw file (.caliper/graph.yaml)</summary>
+    <pre class="principle-content">{{ docs.graph_text }}</pre>
+  </details>
+  {% endif %}
+  {% endif %}
 </section>
 
 <section class="detail-section" id="settings" data-project-settings>

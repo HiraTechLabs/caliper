@@ -13,6 +13,13 @@ MANIFEST_PATH = f"{DOCS_DIR}/manifest.yaml"
 GRAPH_PATH = f"{DOCS_DIR}/graph.yaml"
 DECISIONS_DIR = f"{DOCS_DIR}/decisions"
 
+DEFAULT_NODE_KIND = "component"
+SENSITIVE_KEY = re.compile(
+    r"(?i)(pass(word)?|secret|token|credential|private[_-]?key|api[_-]?key|"
+    r"access[_-]?key|master[_-]?key)"
+)
+REDACTED = "[redacted]"
+
 
 class ProjectDocsError(Exception):
     pass
@@ -42,6 +49,141 @@ def decisions_readme() -> str:
         "Append one Markdown file per decision. Never edit or delete an old decision.\n"
         "Each file should state the decision, its reason, and the alternatives rejected.\n"
     )
+
+
+def normalize_graph(graph: dict) -> dict:
+    """Turn the graph.yaml data into safe view data without inventing relations.
+
+    Duplicate node ids keep only the first occurrence; edges that reference a
+    missing (or dropped) node are dropped; every problem is reported as a warning.
+    """
+    nodes = graph.get("nodes") or []
+    edges = graph.get("edges") or []
+    if not isinstance(nodes, list) or not isinstance(edges, list):
+        return {
+            "nodes": [], "edges": [], "warnings": ["graph.yaml: nodes and edges must be lists."],
+            "counts": {"nodes": 0, "edges": 0},
+        }
+    warnings: list[str] = []
+    node_ids: set[str] = set()
+    ordered_ids: list[str] = []
+    view_nodes: list[dict] = []
+    for node in nodes:
+        if not isinstance(node, dict) or not str(node.get("id") or "").strip():
+            warnings.append("graph.yaml: every node needs an id.")
+            continue
+        node_id = str(node["id"]).strip()
+        if node_id in node_ids:
+            warnings.append(f"graph.yaml: duplicate node id {node_id}; keeping the first one.")
+            continue
+        node_ids.add(node_id)
+        ordered_ids.append(node_id)
+        view_nodes.append({
+            "id": node_id,
+            "title": str(node.get("title") or node_id),
+            "kind": str(node.get("kind") or DEFAULT_NODE_KIND),
+            "path": str(node.get("path") or "") or None,
+            "description": str(node.get("description") or "") or None,
+            "link": str(node.get("link") or "") or None,
+        })
+    view_edges: list[dict] = []
+    for edge in edges:
+        if not isinstance(edge, dict) or not str(edge.get("from") or "").strip() \
+                or not str(edge.get("to") or "").strip():
+            warnings.append("graph.yaml: every edge needs from and to.")
+            continue
+        source, target = str(edge["from"]).strip(), str(edge["to"]).strip()
+        if source not in node_ids or target not in node_ids:
+            missing = source if source not in node_ids else target
+            warnings.append(f"graph.yaml: edge {source} -> {target} references a missing node {missing}.")
+            continue
+        view_edges.append({"from": source, "to": target, "relation": edge.get("relation")})
+    return {
+        "nodes": view_nodes,
+        "edges": view_edges,
+        "warnings": warnings,
+        "counts": {"nodes": len(view_nodes), "edges": len(view_edges)},
+    }
+
+
+DECISION_FIELDS = {
+    "Date": "date",
+    "Decision": "decision",
+    "Reason": "reason",
+    "Alternatives rejected": "alternatives",
+}
+
+
+def decision_fields(content: str) -> dict:
+    """Read the recorded fields of one decision file. Missing fields stay empty."""
+    fields = {"date": None, "decision": None, "reason": None, "alternatives": None}
+    for line in (content or "").splitlines():
+        match = re.match(r"^\s*[-*]\s*([^:]{1,60}):\s*(.*)$", line)
+        if not match:
+            continue
+        name = (match.group(1) or "").strip().rstrip("*")
+        field = DECISION_FIELDS.get(name)
+        if field and fields[field] is None:
+            fields[field] = match.group(2).strip() or None
+    return fields
+
+
+def _redact(value):
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            if SENSITIVE_KEY.search(str(key)):
+                redacted[key] = REDACTED
+            else:
+                redacted[key] = _redact(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact(item) for item in value]
+    return value
+
+
+def manifest_rows(manifest: dict, prefix: str = "") -> list[tuple[str, str]]:
+    """Flatten a (redacted) mapping into key/value rows for a structured view."""
+    rows: list[tuple[str, str]] = []
+    for key, value in (_redact(manifest) or {}).items():
+        name = f"{prefix}{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            rows.extend(manifest_rows(value, prefix=f"{name}."))
+        elif isinstance(value, list):
+            rows.append((name, yaml.safe_dump(value, default_flow_style=True).strip()))
+        elif value is None:
+            rows.append((name, ""))
+        else:
+            rows.append((name, str(value)))
+    return rows
+
+
+def manifest_workspace(manifest: dict) -> dict:
+    """The .caliper/manifest.yaml as organized sections. Secret-looking values are redacted."""
+    safe = _redact(manifest or {})
+    top = ("id", "name", "product")
+    project = {key: safe[key] for key in top if key in safe}
+    repository = safe.get("repo") or {}
+    other = {key: value for key, value in safe.items() if key not in top and key != "repo"}
+    return {
+        "project": manifest_rows(project),
+        "repository": manifest_rows(repository),
+        "other": manifest_rows(other),
+    }
+
+
+def redacted_manifest_text(text: str) -> str:
+    """A YAML view of the manifest with secret-looking values replaced.
+
+    The original text stays in Git; this is only what the UI may show.
+    """
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return REDACTED + " (the manifest is not valid YAML)"
+    if data is None:
+        return "" if not text.strip() else REDACTED
+    return yaml.safe_dump(_redact(data), sort_keys=False)
 
 
 def _now() -> str:
@@ -167,9 +309,11 @@ class ProjectDocsService:
             "error": error,
             "manifest": None,
             "manifest_text": None,
+            "manifest_text_redacted": None,
             "graph": None,
             "graph_text": None,
             "graph_error": None,
+            "graph_view": {"nodes": [], "edges": [], "warnings": [], "counts": {"nodes": 0, "edges": 0}},
             "decisions": [],
             "decisions_error": None,
             "missing": [MANIFEST_PATH, GRAPH_PATH, DECISIONS_DIR],
@@ -187,6 +331,12 @@ class ProjectDocsService:
             if not (root / path).exists()
         ]
         errors = [error for error in (manifest_error, graph_error, decisions_error) if error]
+        graph_view = normalize_graph(graph) if graph is not None else {
+            "nodes": [], "edges": [], "warnings": [],
+            "counts": {"nodes": 0, "edges": 0},
+        }
+        for decision in decisions:
+            decision["fields"] = decision_fields(decision["content"])
         return {
             "project_id": project_id,
             "branch": branch,
@@ -195,9 +345,13 @@ class ProjectDocsService:
             "error": " ".join(errors) or None,
             "manifest": manifest,
             "manifest_text": manifest_text,
+            "manifest_text_redacted": (
+                redacted_manifest_text(manifest_text) if manifest_text else None
+            ),
             "graph": graph,
             "graph_text": graph_text,
             "graph_error": graph_error,
+            "graph_view": graph_view,
             "decisions": decisions,
             "decisions_error": decisions_error,
             "missing": missing,
